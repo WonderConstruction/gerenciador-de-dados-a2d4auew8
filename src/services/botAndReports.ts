@@ -153,10 +153,45 @@ export const botService = {
     action: 'getWebhookInfo' | 'setWebhook' | 'deleteWebhook' | 'getMe'
     webhook_url?: string
   }) {
-    return await pb.send('/api/custom/telegram/manage-webhook', {
-      method: 'POST',
-      body: params,
-    })
+    try {
+      return await pb.send('/api/custom/telegram/manage-webhook', {
+        method: 'POST',
+        body: params,
+      })
+    } catch (err: any) {
+      // Fallback: If PocketBase custom endpoint returns 404 or fails, proxy directly to Telegram API from browser
+      const botToken = params.bot_token.trim()
+      const telegramBase = `https://api.telegram.org/bot${botToken}`
+
+      if (params.action === 'getMe') {
+        const res = await fetch(`${telegramBase}/getMe`)
+        return await res.json()
+      } else if (params.action === 'getWebhookInfo') {
+        const res = await fetch(`${telegramBase}/getWebhookInfo`)
+        return await res.json()
+      } else if (params.action === 'setWebhook') {
+        const res = await fetch(`${telegramBase}/setWebhook`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            url: params.webhook_url,
+            allowed_updates: ['message', 'edited_message'],
+            drop_pending_updates: false,
+          }),
+        })
+        return await res.json()
+      } else if (params.action === 'deleteWebhook') {
+        const res = await fetch(`${telegramBase}/deleteWebhook`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            drop_pending_updates: false,
+          }),
+        })
+        return await res.json()
+      }
+      throw err
+    }
   },
 }
 
