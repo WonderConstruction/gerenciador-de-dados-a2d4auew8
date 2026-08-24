@@ -1,0 +1,523 @@
+{
+  "generatedAt": "2026-08-24T13:08:59.909Z",
+  "collections": [
+    {
+      "name": "users",
+      "type": "auth",
+      "apiRules": {
+        "list": "id = @request.auth.id",
+        "view": "id = @request.auth.id",
+        "create": "",
+        "update": "id = @request.auth.id",
+        "delete": "id = @request.auth.id"
+      },
+      "fields": [
+        {
+          "name": "name",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "avatar",
+          "type": "file",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "created",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate"]
+        },
+        {
+          "name": "updated",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate", "onUpdate"]
+        }
+      ],
+      "indexes": [
+        "CREATE UNIQUE INDEX `idx_tokenKey__pb_users_auth_` ON `users` (`tokenKey`)",
+        "CREATE UNIQUE INDEX `idx_email__pb_users_auth_` ON `users` (`email`) WHERE `email` != ''"
+      ]
+    },
+    {
+      "name": "obras",
+      "type": "base",
+      "apiRules": {
+        "list": "@request.auth.id != '' && user_id = @request.auth.id",
+        "view": "",
+        "create": "@request.auth.id != ''",
+        "update": "@request.auth.id != '' && user_id = @request.auth.id",
+        "delete": "@request.auth.id != '' && user_id = @request.auth.id"
+      },
+      "fields": [
+        {
+          "name": "user_id",
+          "type": "relation",
+          "required": true,
+          "system": false,
+          "collectionRef": "users"
+        },
+        {
+          "name": "name",
+          "type": "text",
+          "required": true,
+          "system": false
+        },
+        {
+          "name": "client_name",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "client_email",
+          "type": "email",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "client_phone",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "total_budget",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "status",
+          "type": "select",
+          "required": true,
+          "system": false,
+          "selectValues": ["planejamento", "em_andamento", "pausada", "concluida"]
+        },
+        {
+          "name": "address",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "start_date",
+          "type": "date",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "end_date",
+          "type": "date",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "notes",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "share_token",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "share_password",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "google_sheets_url",
+          "type": "url",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "google_sheets_id",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "last_sheets_sync",
+          "type": "date",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "created",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate"]
+        },
+        {
+          "name": "updated",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate", "onUpdate"]
+        }
+      ],
+      "indexes": [
+        "CREATE INDEX idx_obras_user ON obras (user_id)",
+        "CREATE INDEX idx_obras_status ON obras (status)",
+        "CREATE INDEX idx_obras_share ON obras (share_token)"
+      ]
+    },
+    {
+      "name": "transactions",
+      "type": "base",
+      "apiRules": {
+        "list": "@request.auth.id != '' || obra_id.share_token != ''",
+        "view": "@request.auth.id != '' || obra_id.share_token != ''",
+        "create": "@request.auth.id != ''",
+        "update": "@request.auth.id != ''",
+        "delete": "@request.auth.id != ''"
+      },
+      "fields": [
+        {
+          "name": "obra_id",
+          "type": "relation",
+          "required": true,
+          "system": false,
+          "collectionRef": "obras"
+        },
+        {
+          "name": "user_id",
+          "type": "relation",
+          "required": true,
+          "system": false,
+          "collectionRef": "users"
+        },
+        {
+          "name": "type",
+          "type": "select",
+          "required": true,
+          "system": false,
+          "selectValues": ["income", "expense"]
+        },
+        {
+          "name": "amount",
+          "type": "number",
+          "required": true,
+          "system": false
+        },
+        {
+          "name": "category",
+          "type": "select",
+          "required": true,
+          "system": false,
+          "selectValues": [
+            "frame",
+            "labor",
+            "electrical",
+            "plumbing",
+            "materials",
+            "equipment",
+            "finishing",
+            "permits",
+            "other"
+          ]
+        },
+        {
+          "name": "description",
+          "type": "text",
+          "required": true,
+          "system": false
+        },
+        {
+          "name": "date",
+          "type": "date",
+          "required": true,
+          "system": false
+        },
+        {
+          "name": "receipt_file",
+          "type": "file",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "source",
+          "type": "select",
+          "required": false,
+          "system": false,
+          "selectValues": ["manual", "whatsapp", "telegram", "import"]
+        },
+        {
+          "name": "raw_bot_text",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "ocr_extracted_data",
+          "type": "json",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "sheets_synced",
+          "type": "bool",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "notes",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "created",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate"]
+        },
+        {
+          "name": "updated",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate", "onUpdate"]
+        }
+      ],
+      "indexes": [
+        "CREATE INDEX idx_transactions_obra ON transactions (obra_id)",
+        "CREATE INDEX idx_transactions_date ON transactions (date DESC)",
+        "CREATE INDEX idx_transactions_category ON transactions (category)"
+      ]
+    },
+    {
+      "name": "bot_messages",
+      "type": "base",
+      "apiRules": {
+        "list": "@request.auth.id != ''",
+        "view": "@request.auth.id != ''",
+        "create": "",
+        "update": "@request.auth.id != ''",
+        "delete": "@request.auth.id != ''"
+      },
+      "fields": [
+        {
+          "name": "platform",
+          "type": "select",
+          "required": true,
+          "system": false,
+          "selectValues": ["telegram", "whatsapp", "simulated"]
+        },
+        {
+          "name": "sender_id",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "sender_name",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "obra_id",
+          "type": "relation",
+          "required": false,
+          "system": false,
+          "collectionRef": "obras"
+        },
+        {
+          "name": "media_file",
+          "type": "file",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "caption",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "suggested_category",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "suggested_amount",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "suggested_type",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "status",
+          "type": "select",
+          "required": false,
+          "system": false,
+          "selectValues": ["processed", "pending_review", "error"]
+        },
+        {
+          "name": "parsed_transaction_id",
+          "type": "relation",
+          "required": false,
+          "system": false,
+          "collectionRef": "transactions"
+        },
+        {
+          "name": "payload_raw",
+          "type": "json",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "created",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate"]
+        },
+        {
+          "name": "updated",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate", "onUpdate"]
+        }
+      ],
+      "indexes": ["CREATE INDEX idx_bot_msgs_created ON bot_messages (created DESC)"]
+    },
+    {
+      "name": "report_configs",
+      "type": "base",
+      "apiRules": {
+        "list": "@request.auth.id != '' && user_id = @request.auth.id",
+        "view": "@request.auth.id != '' && user_id = @request.auth.id",
+        "create": "@request.auth.id != ''",
+        "update": "@request.auth.id != '' && user_id = @request.auth.id",
+        "delete": "@request.auth.id != '' && user_id = @request.auth.id"
+      },
+      "fields": [
+        {
+          "name": "user_id",
+          "type": "relation",
+          "required": true,
+          "system": false,
+          "collectionRef": "users"
+        },
+        {
+          "name": "recipient_email",
+          "type": "email",
+          "required": true,
+          "system": false
+        },
+        {
+          "name": "weekly_enabled",
+          "type": "bool",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "weekly_day",
+          "type": "select",
+          "required": false,
+          "system": false,
+          "selectValues": [
+            "monday",
+            "tuesday",
+            "wednesday",
+            "thursday",
+            "friday",
+            "saturday",
+            "sunday"
+          ]
+        },
+        {
+          "name": "weekly_hour",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "monthly_enabled",
+          "type": "bool",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "monthly_day",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "monthly_hour",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "include_all_obras",
+          "type": "bool",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "telegram_notifications_enabled",
+          "type": "bool",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "telegram_chat_id",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "last_weekly_sent",
+          "type": "date",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "last_monthly_sent",
+          "type": "date",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "created",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate"]
+        },
+        {
+          "name": "updated",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate", "onUpdate"]
+        }
+      ],
+      "indexes": ["CREATE UNIQUE INDEX idx_report_user ON report_configs (user_id)"]
+    }
+  ]
+}
