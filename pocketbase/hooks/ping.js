@@ -1,11 +1,5 @@
-console.log('ping hook loaded')
+console.log('PING HOOK LOADED')
 
-onBootstrap((e) => {
-  console.log('ping onBootstrap called')
-  e.next()
-})
-
-routerAdd('GET', '/api/custom/ping', (c) => {
-  console.log('ping endpoint called')
+routerAdd('GET', '/custom/ping', (c) => {
   return c.json(200, { ok: true, time: new Date().toISOString() })
 })
