@@ -74,8 +74,7 @@ export function TelegramWebhookConfig({ obras, onWebhookConfigured }: TelegramWe
   // Auto-fill default Webhook URL on mount
   useEffect(() => {
     // Native PocketBase records API endpoint for Telegram Webhook
-    const defaultUrl =
-      'https://gerenciador-de-dados-e1ffa.goskip.app/api/collections/telegram_messages/records'
+    const defaultUrl = getBotIncomingWebhookUrl()
     setWebhookUrl(defaultUrl)
 
     // Load saved token from localStorage if exists or preset default
