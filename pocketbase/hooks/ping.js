@@ -1,9 +1,13 @@
-console.log('PING HOOK LOADED')
+console.log('--- TEST HOOK BOOTSTRAP STARTING ---')
 
 routerAdd('GET', '/custom/ping', (c) => {
-  return c.json(200, { ok: true, time: new Date().toISOString() })
+  console.log('HIT /custom/ping')
+  return c.json(200, { ok: true, source: 'root-ping' })
 })
 
 routerAdd('GET', '/api/custom/ping', (c) => {
-  return c.json(200, { ok: true, time: new Date().toISOString() })
+  console.log('HIT /api/custom/ping')
+  return c.json(200, { ok: true, source: 'api-ping' })
 })
+
+console.log('--- TEST HOOK BOOTSTRAP FINISHED ---')
