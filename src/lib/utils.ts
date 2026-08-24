@@ -52,8 +52,8 @@ export function getPublicAppBaseUrl(): string {
 }
 
 /**
- * Gets the public webhook URL for incoming bot messages (Telegram, WhatsApp)
+ * Gets the public webhook URL for incoming bot messages (Telegram native PocketBase records API)
  */
 export function getBotIncomingWebhookUrl(): string {
-  return `${getPublicAppBaseUrl()}/api/custom/webhooks/bot-incoming`
+  return 'https://gerenciador-de-dados-e1ffa.goskip.app/api/collections/telegram_messages/records'
 }

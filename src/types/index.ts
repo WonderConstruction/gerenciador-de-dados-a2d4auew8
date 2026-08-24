@@ -37,6 +37,20 @@ export interface Obra {
   updated: string
 }
 
+export interface TelegramMessage {
+  id: string
+  update_id?: number
+  chat_id?: number
+  message_text?: string
+  caption?: string
+  file_id?: string
+  file_type?: string
+  raw_payload?: any
+  processed?: boolean
+  created: string
+  updated: string
+}
+
 export interface Transaction {
   id: string
   obra_id: string
@@ -48,6 +62,9 @@ export interface Transaction {
   date: string
   receipt_file?: string
   source?: 'manual' | 'whatsapp' | 'telegram' | 'import'
+  source_message?: string
+  status?: 'pending' | 'reviewed' | 'exported'
+  project?: string
   raw_bot_text?: string
   ocr_extracted_data?: any
   sheets_synced?: boolean
@@ -56,6 +73,7 @@ export interface Transaction {
   updated: string
   expand?: {
     obra_id?: Obra
+    source_message?: TelegramMessage
   }
 }
 

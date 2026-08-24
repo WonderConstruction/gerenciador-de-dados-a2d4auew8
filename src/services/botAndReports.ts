@@ -153,20 +153,6 @@ export const botService = {
     action: 'getWebhookInfo' | 'setWebhook' | 'deleteWebhook' | 'getMe'
     webhook_url?: string
   }) {
-    try {
-      const res = await pb.send('/api/custom/telegram/manage-webhook', {
-        method: 'POST',
-        body: params,
-      })
-      if (res) return res
-    } catch (backendErr: any) {
-      console.warn(
-        'Backend manage-webhook call failed, falling back to direct Telegram API call:',
-        backendErr,
-      )
-    }
-
-    // Direct Telegram API fallback: allows client-side configuration even if server hook is unavailable
     const botToken = params.bot_token.trim()
     const telegramBase = `https://api.telegram.org/bot${botToken}`
 
@@ -199,7 +185,7 @@ export const botService = {
         return await res.json()
       }
     } catch (err: any) {
-      throw new Error(err.message || 'Falha na comunicação direta com o Telegram.')
+      throw new Error(err.message || 'Falha na comunicação com a API do Telegram.')
     }
 
     throw new Error('Ação de webhook não reconhecida')

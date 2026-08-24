@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-08-24T23:06:42.184Z",
+  "generatedAt": "2026-08-24T23:28:47.268Z",
   "collections": [
     {
       "name": "users",
@@ -291,6 +291,26 @@
           "required": false,
           "system": false,
           "autodateTriggers": ["onCreate", "onUpdate"]
+        },
+        {
+          "name": "source_message",
+          "type": "relation",
+          "required": false,
+          "system": false,
+          "collectionRef": "telegram_messages"
+        },
+        {
+          "name": "status",
+          "type": "select",
+          "required": false,
+          "system": false,
+          "selectValues": ["pending", "reviewed", "exported"]
+        },
+        {
+          "name": "project",
+          "type": "text",
+          "required": false,
+          "system": false
         }
       ],
       "indexes": [
@@ -586,6 +606,85 @@
         }
       ],
       "indexes": []
+    },
+    {
+      "name": "telegram_messages",
+      "type": "base",
+      "apiRules": {
+        "list": "@request.auth.id != ''",
+        "view": "@request.auth.id != ''",
+        "create": "",
+        "update": "@request.auth.id != ''",
+        "delete": "@request.auth.id != ''"
+      },
+      "fields": [
+        {
+          "name": "update_id",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "chat_id",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "message_text",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "caption",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "file_id",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "file_type",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "raw_payload",
+          "type": "json",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "processed",
+          "type": "bool",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "created",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate"]
+        },
+        {
+          "name": "updated",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate", "onUpdate"]
+        }
+      ],
+      "indexes": [
+        "CREATE INDEX idx_telegram_msgs_created ON telegram_messages (created DESC)",
+        "CREATE INDEX idx_telegram_msgs_chat ON telegram_messages (chat_id)"
+      ]
     }
   ]
 }
