@@ -72,8 +72,12 @@ export function TelegramWebhookConfig({ obras, onWebhookConfigured }: TelegramWe
 
   // Auto-fill default Webhook URL on mount
   useEffect(() => {
-    const origin = window.location.origin
-    const defaultUrl = `${origin}/api/custom/webhooks/bot-incoming`
+    // Prefer PocketBase backend URL for the webhook endpoint if available
+    const backendBase = (import.meta.env.VITE_POCKETBASE_URL || window.location.origin).replace(
+      /\/+$/,
+      '',
+    )
+    const defaultUrl = `${backendBase}/api/custom/webhooks/bot-incoming`
     setWebhookUrl(defaultUrl)
 
     // Load saved token from localStorage if exists

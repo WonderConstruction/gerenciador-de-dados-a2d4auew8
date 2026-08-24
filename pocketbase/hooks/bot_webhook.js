@@ -13,14 +13,37 @@ routerAdd('POST', '/api/custom/webhooks/bot-incoming', (e) => {
   let chatId = ''
 
   if (body.message && body.message.chat) {
-    // Telegram format
+    // Telegram format (message)
     platform = 'telegram'
-    senderName = body.message.from
-      ? ((body.message.from.first_name || '') + ' ' + (body.message.from.last_name || '')).trim()
+    const msg = body.message
+    senderName = msg.from
+      ? ((msg.from.first_name || '') + ' ' + (msg.from.last_name || '')).trim() ||
+        msg.from.username ||
+        'Telegram User'
       : 'Telegram User'
-    senderId = String(body.message.chat.id || '')
-    chatId = String(body.message.chat.id || '')
-    text = body.message.caption || body.message.text || ''
+    senderId = String(msg.chat.id || (msg.from && msg.from.id) || '')
+    chatId = String(msg.chat.id || '')
+    text = msg.caption || msg.text || ''
+  } else if (body.edited_message && body.edited_message.chat) {
+    // Telegram format (edited_message)
+    platform = 'telegram'
+    const msg = body.edited_message
+    senderName = msg.from
+      ? ((msg.from.first_name || '') + ' ' + (msg.from.last_name || '')).trim() ||
+        msg.from.username ||
+        'Telegram User'
+      : 'Telegram User'
+    senderId = String(msg.chat.id || (msg.from && msg.from.id) || '')
+    chatId = String(msg.chat.id || '')
+    text = msg.caption || msg.text || ''
+  } else if (body.channel_post && body.channel_post.chat) {
+    // Telegram format (channel_post)
+    platform = 'telegram'
+    const msg = body.channel_post
+    senderName = msg.chat.title || 'Telegram Channel'
+    senderId = String(msg.chat.id || '')
+    chatId = String(msg.chat.id || '')
+    text = msg.caption || msg.text || ''
   } else if (body.entry && body.entry[0] && body.entry[0].changes) {
     // WhatsApp Cloud API format
     platform = 'whatsapp'

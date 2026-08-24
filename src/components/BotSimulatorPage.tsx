@@ -160,7 +160,11 @@ export function BotSimulatorPage({
     }
   }
 
-  const webhookUrl = `${window.location.origin}/api/custom/webhooks/bot-incoming`
+  const backendBase = (import.meta.env.VITE_POCKETBASE_URL || window.location.origin).replace(
+    /\/+$/,
+    '',
+  )
+  const webhookUrl = `${backendBase}/api/custom/webhooks/bot-incoming`
 
   const copyWebhook = () => {
     navigator.clipboard.writeText(webhookUrl)
