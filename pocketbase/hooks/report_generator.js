@@ -1,3 +1,5 @@
+console.log('report_generator route registered')
+
 // Hook for weekly and monthly report dispatch / preview
 routerAdd('POST', '/api/custom/reports/trigger', (e) => {
   const req = e.requestInfo()

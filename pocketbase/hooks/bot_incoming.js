@@ -1,3 +1,5 @@
+console.log('bot_incoming route registered')
+
 // Webhook receiver for Telegram, WhatsApp and Simulator bots
 routerAdd('POST', '/api/custom/webhooks/bot-incoming', (e) => {
   const req = e.requestInfo()
@@ -8,7 +10,6 @@ routerAdd('POST', '/api/custom/webhooks/bot-incoming', (e) => {
   let senderName = 'Desconhecido'
   let senderId = ''
   let text = ''
-  let fileUrl = ''
   let chatId = ''
 
   if (body.message && body.message.chat) {

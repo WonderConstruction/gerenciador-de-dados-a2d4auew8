@@ -1,3 +1,5 @@
+console.log('bot_parser route registered')
+
 // Hook for bot parsing & automatic categorization
 routerAdd('POST', '/api/custom/bot/parse-and-create', (e) => {
   const req = e.requestInfo()

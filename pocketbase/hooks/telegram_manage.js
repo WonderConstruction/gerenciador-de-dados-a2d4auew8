@@ -1,3 +1,5 @@
+console.log('telegram_manage route registered')
+
 // Telegram Webhook Management Helper — verify bot token, check webhook status, set webhook, delete webhook
 routerAdd('POST', '/api/custom/telegram/manage-webhook', (e) => {
   const req = e.requestInfo()
