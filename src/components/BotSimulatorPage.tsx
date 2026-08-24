@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Obra, BotPlatform, TransactionCategory, CATEGORY_LABELS } from '@/types'
 import { botService } from '@/services/botAndReports'
 import { transactionsService } from '@/services/transactions'
+import { getBotIncomingWebhookUrl } from '@/lib/utils'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -160,11 +161,7 @@ export function BotSimulatorPage({
     }
   }
 
-  const backendBase = (import.meta.env.VITE_POCKETBASE_URL || window.location.origin).replace(
-    /\/+$/,
-    '',
-  )
-  const webhookUrl = `${backendBase}/api/custom/webhooks/bot-incoming`
+  const webhookUrl = getBotIncomingWebhookUrl()
 
   const copyWebhook = () => {
     navigator.clipboard.writeText(webhookUrl)

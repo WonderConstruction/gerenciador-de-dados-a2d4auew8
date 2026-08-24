@@ -154,15 +154,23 @@ export const botService = {
     webhook_url?: string
   }) {
     try {
-      return await pb.send('/api/custom/telegram/manage-webhook', {
+      const res = await pb.send('/api/custom/telegram/manage-webhook', {
         method: 'POST',
         body: params,
       })
-    } catch (err: any) {
-      // Fallback: If PocketBase custom endpoint returns 404 or fails, proxy directly to Telegram API from browser
-      const botToken = params.bot_token.trim()
-      const telegramBase = `https://api.telegram.org/bot${botToken}`
+      if (res) return res
+    } catch (backendErr: any) {
+      console.warn(
+        'Backend manage-webhook call failed, falling back to direct Telegram API call:',
+        backendErr,
+      )
+    }
 
+    // Direct Telegram API fallback: allows client-side configuration even if server hook is unavailable
+    const botToken = params.bot_token.trim()
+    const telegramBase = `https://api.telegram.org/bot${botToken}`
+
+    try {
       if (params.action === 'getMe') {
         const res = await fetch(`${telegramBase}/getMe`)
         return await res.json()
@@ -190,8 +198,11 @@ export const botService = {
         })
         return await res.json()
       }
-      throw err
+    } catch (err: any) {
+      throw new Error(err.message || 'Falha na comunicação direta com o Telegram.')
     }
+
+    throw new Error('Ação de webhook não reconhecida')
   },
 }
 

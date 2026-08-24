@@ -8,6 +8,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useToast } from '@/hooks/use-toast'
 import { botService } from '@/services/botAndReports'
 import { Obra } from '@/types'
+import { getBotIncomingWebhookUrl } from '@/lib/utils'
 import {
   Send,
   CheckCircle2,
@@ -72,12 +73,8 @@ export function TelegramWebhookConfig({ obras, onWebhookConfigured }: TelegramWe
 
   // Auto-fill default Webhook URL on mount
   useEffect(() => {
-    // Prefer PocketBase backend URL for the webhook endpoint if available
-    const backendBase = (import.meta.env.VITE_POCKETBASE_URL || window.location.origin).replace(
-      /\/+$/,
-      '',
-    )
-    const defaultUrl = `${backendBase}/api/custom/webhooks/bot-incoming`
+    // Always use the public webhook URL accessible by Telegram (not .internal.goskip.dev)
+    const defaultUrl = getBotIncomingWebhookUrl()
     setWebhookUrl(defaultUrl)
 
     // Load saved token from localStorage if exists
@@ -189,6 +186,16 @@ export function TelegramWebhookConfig({ obras, onWebhookConfigured }: TelegramWe
       return
     }
 
+    if (cleanUrl.includes('.internal.goskip.dev')) {
+      toast({
+        title: 'URL Interna Inválida',
+        description:
+          'A URL do webhook não pode conter domínio interno (.internal.goskip.dev). Use o domínio público do app.',
+        variant: 'destructive',
+      })
+      return
+    }
+
     setIsSettingWebhook(true)
     try {
       const res: any = await botService.manageTelegramWebhook({
@@ -210,14 +217,14 @@ export function TelegramWebhookConfig({ obras, onWebhookConfigured }: TelegramWe
       } else {
         toast({
           title: 'Falha ao configurar webhook',
-          description: res?.description || 'Erro ao registrar Webhook no Telegram.',
+          description: res?.description || res?.error || 'Erro ao registrar Webhook no Telegram.',
           variant: 'destructive',
         })
       }
     } catch (err: any) {
       toast({
         title: 'Erro ao configurar webhook',
-        description: err.message,
+        description: err.message || 'Falha ao conectar com o Telegram.',
         variant: 'destructive',
       })
     } finally {
