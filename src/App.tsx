@@ -1,4 +1,5 @@
 /* Main App Component - Handles routing (using react-router-dom), query client and other providers - use this file to add all routes */
+import { useEffect } from 'react'
 import { BrowserRouter, Routes, Route } from 'react-router-dom'
 import { Toaster } from '@/components/ui/toaster'
 import { Toaster as Sonner } from '@/components/ui/sonner'
@@ -7,23 +8,34 @@ import { AuthProvider } from './contexts/AuthContext'
 import Index from './pages/Index'
 import NotFound from './pages/NotFound'
 import Layout from './components/Layout'
+import { telegramPolling } from './services/telegramPolling'
 
-const App = () => (
-  <BrowserRouter>
-    <AuthProvider>
-      <TooltipProvider>
-        <Toaster />
-        <Sonner />
-        <Routes>
-          <Route element={<Layout />}>
-            <Route path="/" element={<Index />} />
-            {/* ADD ALL CUSTOM ROUTES MUST BE ADDED HERE */}
-          </Route>
-          <Route path="*" element={<NotFound />} />
-        </Routes>
-      </TooltipProvider>
-    </AuthProvider>
-  </BrowserRouter>
-)
+const App = () => {
+  useEffect(() => {
+    // Start continuous Telegram polling in background
+    telegramPolling.start()
+    return () => {
+      telegramPolling.stop()
+    }
+  }, [])
+
+  return (
+    <BrowserRouter>
+      <AuthProvider>
+        <TooltipProvider>
+          <Toaster />
+          <Sonner />
+          <Routes>
+            <Route element={<Layout />}>
+              <Route path="/" element={<Index />} />
+              {/* ADD ALL CUSTOM ROUTES MUST BE ADDED HERE */}
+            </Route>
+            <Route path="*" element={<NotFound />} />
+          </Routes>
+        </TooltipProvider>
+      </AuthProvider>
+    </BrowserRouter>
+  )
+}
 
 export default App

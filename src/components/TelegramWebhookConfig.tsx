@@ -1,19 +1,18 @@
 import { useState, useEffect, useCallback } from 'react'
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
-import { Switch } from '@/components/ui/switch'
 import { useToast } from '@/hooks/use-toast'
 import { botService } from '@/services/botAndReports'
+import { telegramPolling, TelegramPollingStatus } from '@/services/telegramPolling'
 import { Obra } from '@/types'
 import {
   Send,
   CheckCircle2,
   ExternalLink,
   AlertCircle,
-  HelpCircle,
   Sparkles,
   RefreshCw,
   Trash2,
@@ -24,7 +23,6 @@ import {
   Bot,
   Layers,
   Database,
-  ArrowDownCircle,
   Clock,
 } from 'lucide-react'
 
@@ -41,7 +39,9 @@ export function TelegramWebhookConfig({ obras, onWebhookConfigured }: TelegramWe
   const [isVerifying, setIsVerifying] = useState(false)
   const [isSyncingNow, setIsSyncingNow] = useState(false)
   const [isCleaningWebhook, setIsCleaningWebhook] = useState(false)
-  const [autoPollingEnabled, setAutoPollingEnabled] = useState(true)
+  const [pollingStatus, setPollingStatus] = useState<TelegramPollingStatus>(
+    telegramPolling.getStatus(),
+  )
 
   // Bot Info & Webhook Status from Telegram API
   const [botProfile, setBotProfile] = useState<{
@@ -129,12 +129,20 @@ export function TelegramWebhookConfig({ obras, onWebhookConfigured }: TelegramWe
     handleVerifyBot(token)
     refreshBackendData()
 
+    // Subscribe to Telegram polling service live status
+    const unsubscribePolling = telegramPolling.subscribe((status) => {
+      setPollingStatus(status)
+    })
+
     // Poll backend state every 10 seconds to show live updates
     const interval = setInterval(() => {
       refreshBackendData()
     }, 10000)
 
-    return () => clearInterval(interval)
+    return () => {
+      clearInterval(interval)
+      unsubscribePolling()
+    }
   }, [handleVerifyBot, refreshBackendData])
 
   // Manual Trigger: Pull updates now
@@ -181,22 +189,19 @@ export function TelegramWebhookConfig({ obras, onWebhookConfigured }: TelegramWe
     }
   }
 
-  // Delete webhook to ensure polling mode works cleanly (prevent 405 error)
+  // Delete webhook with drop_pending_updates=true to ensure polling mode works cleanly (prevent 405 error)
   const handleEnsurePollingClean = async () => {
     const cleanToken = botToken.trim()
     if (!cleanToken) return
 
     setIsCleaningWebhook(true)
     try {
-      const res: any = await botService.manageTelegramWebhook({
-        bot_token: cleanToken,
-        action: 'deleteWebhook',
-      })
+      const res = await telegramPolling.clearWebhook(cleanToken)
 
       if (res && res.ok) {
         toast({
           title: '✅ Webhook desativado com sucesso!',
-          description: 'O bot agora está operando 100% em modo Polling Contínuo (getUpdates).',
+          description: 'O bot agora está operando 100% em modo Polling Contínuo no frontend.',
         })
         await handleVerifyBot(cleanToken)
       } else {
@@ -248,30 +253,42 @@ export function TelegramWebhookConfig({ obras, onWebhookConfigured }: TelegramWe
             <span className="text-[11px] font-semibold uppercase text-sky-400 block tracking-wider">
               Status do Polling
             </span>
-            <span className="flex h-2.5 w-2.5 relative">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-              <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
-            </span>
+            {pollingStatus.isActive ? (
+              <span className="flex h-2.5 w-2.5 relative">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
+              </span>
+            ) : (
+              <span className="h-2.5 w-2.5 rounded-full bg-rose-500 inline-block"></span>
+            )}
           </div>
 
           <div className="space-y-1">
             <div className="flex items-center gap-2">
-              <span className="font-bold text-sm text-emerald-400">Cron Ativo</span>
+              <span
+                className={`font-bold text-sm ${pollingStatus.isActive ? 'text-emerald-400' : 'text-rose-400'}`}
+              >
+                {pollingStatus.isActive ? 'Polling ativo' : 'Polling inativo'}
+              </span>
               <Badge
                 variant="outline"
-                className="text-[10px] bg-emerald-950 text-emerald-300 border-emerald-600"
+                className={`text-[10px] ${
+                  pollingStatus.isActive
+                    ? 'bg-emerald-950 text-emerald-300 border-emerald-600'
+                    : 'bg-rose-950 text-rose-300 border-rose-600'
+                }`}
               >
-                10s / 60s
+                {pollingStatus.isActive ? '2s auto' : 'Parado'}
               </Badge>
             </div>
             <p className="text-[11px] text-slate-300 flex items-center gap-1 font-mono">
               <Clock className="w-3 h-3 text-slate-400" />
-              {lastPollAt}
+              Offset: {pollingStatus.offset} | Sessão: {pollingStatus.sessionReceivedCount}
             </p>
           </div>
 
           <div className="pt-2 border-t border-slate-800 flex justify-between items-center text-[11px]">
-            <span className="text-slate-400">Total Mensagens:</span>
+            <span className="text-slate-400">Total no Banco:</span>
             <span className="font-bold text-white font-mono">{totalMessagesCount}</span>
           </div>
         </div>
@@ -511,10 +528,23 @@ export function TelegramWebhookConfig({ obras, onWebhookConfigured }: TelegramWe
                   <span className="text-slate-400">Modo de Operação:</span>
                   <Badge
                     variant="outline"
-                    className="bg-emerald-950 text-emerald-300 border-emerald-600 text-[10px]"
+                    className="bg-emerald-950 text-emerald-300 border-emerald-600 text-[10px] flex items-center gap-1"
                   >
-                    Polling Backend + Cron
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                    Frontend Polling (2s)
                   </Badge>
+                </div>
+
+                <div className="flex justify-between items-center border-b border-slate-800 pb-2">
+                  <span className="text-slate-400">Offset do Polling (localStorage):</span>
+                  <span className="font-bold text-amber-400 font-mono">{pollingStatus.offset}</span>
+                </div>
+
+                <div className="flex justify-between items-center border-b border-slate-800 pb-2">
+                  <span className="text-slate-400">Recebidas nesta sessão:</span>
+                  <span className="font-bold text-emerald-400 font-mono">
+                    {pollingStatus.sessionReceivedCount}
+                  </span>
                 </div>
 
                 <div className="flex justify-between items-center border-b border-slate-800 pb-2">
