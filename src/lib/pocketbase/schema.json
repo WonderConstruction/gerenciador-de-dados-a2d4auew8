@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-08-24T23:46:22.624Z",
+  "generatedAt": "2026-08-25T00:32:03.028Z",
   "collections": [
     {
       "name": "users",
@@ -611,9 +611,9 @@
       "name": "telegram_messages",
       "type": "base",
       "apiRules": {
-        "list": "@request.auth.id != ''",
-        "view": "@request.auth.id != ''",
-        "create": "",
+        "list": "",
+        "view": "",
+        "create": "1=1",
         "update": "@request.auth.id != ''",
         "delete": "@request.auth.id != ''"
       },
@@ -685,6 +685,52 @@
         "CREATE INDEX idx_telegram_msgs_created ON telegram_messages (created DESC)",
         "CREATE INDEX idx_telegram_msgs_chat ON telegram_messages (chat_id)"
       ]
+    },
+    {
+      "name": "telegram_state",
+      "type": "base",
+      "apiRules": {
+        "list": "",
+        "view": "",
+        "create": "",
+        "update": "",
+        "delete": "@request.auth.id != ''"
+      },
+      "fields": [
+        {
+          "name": "key",
+          "type": "text",
+          "required": true,
+          "system": false
+        },
+        {
+          "name": "value",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "text_value",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "created",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate"]
+        },
+        {
+          "name": "updated",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate", "onUpdate"]
+        }
+      ],
+      "indexes": ["CREATE UNIQUE INDEX idx_telegram_state_key ON telegram_state (key)"]
     }
   ]
 }
