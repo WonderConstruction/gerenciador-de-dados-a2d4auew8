@@ -150,8 +150,9 @@ export const botService = {
 
   async manageTelegramWebhook(params: {
     bot_token: string
-    action: 'getWebhookInfo' | 'setWebhook' | 'deleteWebhook' | 'getMe'
+    action: 'getWebhookInfo' | 'setWebhook' | 'deleteWebhook' | 'getMe' | 'getUpdates'
     webhook_url?: string
+    offset?: number
   }) {
     const botToken = params.bot_token.trim()
     const telegramBase = `https://api.telegram.org/bot${botToken}`
@@ -162,6 +163,10 @@ export const botService = {
         return await res.json()
       } else if (params.action === 'getWebhookInfo') {
         const res = await fetch(`${telegramBase}/getWebhookInfo`)
+        return await res.json()
+      } else if (params.action === 'getUpdates') {
+        const offsetParam = params.offset ? `?offset=${params.offset}&timeout=5` : '?timeout=5'
+        const res = await fetch(`${telegramBase}/getUpdates${offsetParam}`)
         return await res.json()
       } else if (params.action === 'setWebhook') {
         const res = await fetch(`${telegramBase}/setWebhook`, {
@@ -189,6 +194,145 @@ export const botService = {
     }
 
     throw new Error('Ação de webhook não reconhecida')
+  },
+
+  async getTelegramState(): Promise<Record<string, { value?: number; text_value?: string }>> {
+    try {
+      const records = await pb.collection('telegram_state').getFullList<{
+        key: string
+        value?: number
+        text_value?: string
+        updated: string
+      }>()
+      const stateMap: Record<string, { value?: number; text_value?: string; updated?: string }> = {}
+      for (const r of records) {
+        stateMap[r.key] = { value: r.value, text_value: r.text_value, updated: r.updated }
+      }
+      return stateMap
+    } catch {
+      return {}
+    }
+  },
+
+  async getTelegramMessagesCount(): Promise<number> {
+    try {
+      const list = await pb.collection('telegram_messages').getList(1, 1)
+      return list.totalItems
+    } catch {
+      return 0
+    }
+  },
+
+  async processClientUpdates(botToken: string): Promise<{ processed: number; newOffset: number }> {
+    const cleanToken = botToken.trim() || '8855089577:AAGwcjSJzSqZp8u_zPu2DN2V36MY23LhY2Y'
+    let lastUpdateId = 0
+    let stateRecordId = ''
+
+    try {
+      const stateRecs = await pb.collection('telegram_state').getFullList({
+        filter: 'key = "last_update_id"',
+      })
+      if (stateRecs.length > 0) {
+        lastUpdateId = Number(stateRecs[0].value) || 0
+        stateRecordId = stateRecs[0].id
+      }
+    } catch {
+      /* intentionally ignored */
+    }
+
+    const nextOffset = lastUpdateId > 0 ? lastUpdateId + 1 : 0
+    const res = await fetch(
+      `https://api.telegram.org/bot${cleanToken}/getUpdates?offset=${nextOffset}&timeout=5`,
+    )
+    const data = await res.json()
+
+    if (!data || !data.ok || !Array.isArray(data.result)) {
+      throw new Error(data?.description || 'Falha ao buscar mensagens do Telegram')
+    }
+
+    const updates = data.result
+    let processed = 0
+    let maxId = lastUpdateId
+
+    for (const u of updates) {
+      const uId = Number(u.update_id) || 0
+      if (uId > maxId) maxId = uId
+
+      const msg = u.message || u.edited_message || u.channel_post
+      if (!msg) continue
+
+      const chatId = msg.chat?.id ? Number(msg.chat.id) : 0
+      const messageText = msg.text || ''
+      const caption = msg.caption || ''
+      let fileId = ''
+      let fileType = 'text'
+
+      if (msg.photo && Array.isArray(msg.photo) && msg.photo.length > 0) {
+        const largest = msg.photo[msg.photo.length - 1]
+        fileId = largest.file_id || ''
+        fileType = 'photo'
+      } else if (msg.document) {
+        fileId = msg.document.file_id || ''
+        fileType = 'document'
+      }
+
+      // Check if duplicate
+      try {
+        const existing = await pb.collection('telegram_messages').getList(1, 1, {
+          filter: `update_id = ${uId}`,
+        })
+        if (existing.totalItems > 0) continue
+      } catch {
+        /* intentionally ignored */
+      }
+
+      // Insert message — onRecordCreate in migration 0018 handles parsing & transaction creation
+      await pb.collection('telegram_messages').create({
+        update_id: uId,
+        chat_id: chatId,
+        message_text: messageText,
+        caption: caption,
+        file_id: fileId,
+        file_type: fileType,
+        raw_payload: u,
+        processed: false,
+      })
+      processed++
+    }
+
+    if (maxId > lastUpdateId) {
+      if (stateRecordId) {
+        await pb.collection('telegram_state').update(stateRecordId, {
+          value: maxId,
+        })
+      } else {
+        await pb.collection('telegram_state').create({
+          key: 'last_update_id',
+          value: maxId,
+        })
+      }
+    }
+
+    // Update last_poll_at
+    try {
+      const pollRecs = await pb.collection('telegram_state').getFullList({
+        filter: 'key = "last_poll_at"',
+      })
+      if (pollRecs.length > 0) {
+        await pb.collection('telegram_state').update(pollRecs[0].id, {
+          text_value: new Date().toISOString(),
+        })
+      } else {
+        await pb.collection('telegram_state').create({
+          key: 'last_poll_at',
+          text_value: new Date().toISOString(),
+        })
+      }
+    } catch {
+      /* intentionally ignored */
+    }
+
+    return { processed, newOffset: maxId }
   },
 }
 

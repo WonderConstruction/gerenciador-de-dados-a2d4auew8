@@ -1,32 +1,31 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Switch } from '@/components/ui/switch'
 import { useToast } from '@/hooks/use-toast'
 import { botService } from '@/services/botAndReports'
 import { Obra } from '@/types'
-import { getBotIncomingWebhookUrl } from '@/lib/utils'
 import {
   Send,
   CheckCircle2,
-  Copy,
-  Terminal,
   ExternalLink,
-  ShieldCheck,
   AlertCircle,
   HelpCircle,
   Sparkles,
   RefreshCw,
   Trash2,
   Check,
-  Globe,
   Radio,
-  FileCode,
   Zap,
-  Info,
+  Activity,
+  Bot,
+  Layers,
+  Database,
+  ArrowDownCircle,
+  Clock,
 } from 'lucide-react'
 
 interface TelegramWebhookConfigProps {
@@ -38,16 +37,11 @@ export function TelegramWebhookConfig({ obras, onWebhookConfigured }: TelegramWe
   const { toast } = useToast()
 
   // State
-  const [botToken, setBotToken] = useState('')
-  const [webhookUrl, setWebhookUrl] = useState('')
-  const [customSecret, setCustomSecret] = useState('')
-  const [activeStep, setActiveStep] = useState<'step1' | 'step2' | 'step3' | 'step4'>('step1')
-
-  // API Call Statuses
+  const [botToken, setBotToken] = useState('8855089577:AAGwcjSJzSqZp8u_zPu2DN2V36MY23LhY2Y')
   const [isVerifying, setIsVerifying] = useState(false)
-  const [isSettingWebhook, setIsSettingWebhook] = useState(false)
-  const [isDeletingWebhook, setIsDeletingWebhook] = useState(false)
-  const [isCheckingStatus, setIsCheckingStatus] = useState(false)
+  const [isSyncingNow, setIsSyncingNow] = useState(false)
+  const [isCleaningWebhook, setIsCleaningWebhook] = useState(false)
+  const [autoPollingEnabled, setAutoPollingEnabled] = useState(true)
 
   // Bot Info & Webhook Status from Telegram API
   const [botProfile, setBotProfile] = useState<{
@@ -69,185 +63,130 @@ export function TelegramWebhookConfig({ obras, onWebhookConfigured }: TelegramWe
     allowed_updates?: string[]
   } | null>(null)
 
-  const [copiedKey, setCopiedKey] = useState<string | null>(null)
+  // Backend state
+  const [telegramState, setTelegramState] = useState<
+    Record<string, { value?: number; text_value?: string; updated?: string }>
+  >({})
+  const [totalMessagesCount, setTotalMessagesCount] = useState<number>(0)
+  const [lastSyncResult, setLastSyncResult] = useState<{ processed: number; at: string } | null>(
+    null,
+  )
 
-  // Auto-fill default Webhook URL on mount
-  useEffect(() => {
-    // Native PocketBase records API endpoint for Telegram Webhook
-    const defaultUrl = getBotIncomingWebhookUrl()
-    setWebhookUrl(defaultUrl)
-
-    // Load saved token from localStorage if exists or preset default
-    const savedToken = localStorage.getItem('telegram_bot_token')
-    if (savedToken) {
-      setBotToken(savedToken)
-    } else {
-      setBotToken('8855089577:AAGwcjSJzSqZp8u_zPu2DN2V36MY23LhY2Y')
+  // Load state and bot profile on mount
+  const refreshBackendData = useCallback(async () => {
+    try {
+      const [stateMap, count] = await Promise.all([
+        botService.getTelegramState(),
+        botService.getTelegramMessagesCount(),
+      ])
+      setTelegramState(stateMap)
+      setTotalMessagesCount(count)
+    } catch (err) {
+      console.error('Error loading telegram backend state:', err)
     }
   }, [])
 
-  const copyToClipboard = (text: string, keyName: string) => {
-    navigator.clipboard.writeText(text)
-    setCopiedKey(keyName)
-    toast({
-      title: 'Copiado para a área de transferência!',
-      description: text.length > 60 ? `${text.slice(0, 60)}...` : text,
-    })
-    setTimeout(() => setCopiedKey(null), 2000)
-  }
+  // Auto-verify bot profile and check status on mount
+  const handleVerifyBot = useCallback(
+    async (tokenToVerify?: string) => {
+      const cleanToken = (tokenToVerify || botToken).trim()
+      if (!cleanToken) return
 
-  // 1. Verify Bot Token (getMe)
-  const handleVerifyBot = async () => {
+      setIsVerifying(true)
+      try {
+        const [getMeRes, webhookRes] = await Promise.all([
+          botService.manageTelegramWebhook({
+            bot_token: cleanToken,
+            action: 'getMe',
+          }),
+          botService.manageTelegramWebhook({
+            bot_token: cleanToken,
+            action: 'getWebhookInfo',
+          }),
+        ])
+
+        if (getMeRes && getMeRes.ok && getMeRes.result) {
+          setBotProfile(getMeRes.result)
+          localStorage.setItem('telegram_bot_token', cleanToken)
+        }
+
+        if (webhookRes && webhookRes.ok && webhookRes.result) {
+          setWebhookInfo(webhookRes.result)
+        }
+      } catch (err: any) {
+        console.error('Error verifying bot:', err)
+      } finally {
+        setIsVerifying(false)
+      }
+    },
+    [botToken],
+  )
+
+  useEffect(() => {
+    const savedToken = localStorage.getItem('telegram_bot_token')
+    const token = savedToken || '8855089577:AAGwcjSJzSqZp8u_zPu2DN2V36MY23LhY2Y'
+    setBotToken(token)
+    handleVerifyBot(token)
+    refreshBackendData()
+
+    // Poll backend state every 10 seconds to show live updates
+    const interval = setInterval(() => {
+      refreshBackendData()
+    }, 10000)
+
+    return () => clearInterval(interval)
+  }, [handleVerifyBot, refreshBackendData])
+
+  // Manual Trigger: Pull updates now
+  const handleSyncUpdatesNow = async () => {
     const cleanToken = botToken.trim()
     if (!cleanToken) {
       toast({
-        title: 'Token não informado',
-        description: 'Digite ou cole o token gerado pelo @BotFather.',
+        title: 'Token não configurado',
+        description: 'Informe o token do bot para sincronizar mensagens.',
         variant: 'destructive',
       })
       return
     }
 
-    setIsVerifying(true)
+    setIsSyncingNow(true)
     try {
-      const res: any = await botService.manageTelegramWebhook({
-        bot_token: cleanToken,
-        action: 'getMe',
+      const result = await botService.processClientUpdates(cleanToken)
+      setLastSyncResult({
+        processed: result.processed,
+        at: new Date().toLocaleTimeString('pt-BR'),
       })
+      await Promise.all([refreshBackendData(), handleVerifyBot(cleanToken)])
 
-      if (res && res.ok && res.result) {
-        setBotProfile(res.result)
-        localStorage.setItem('telegram_bot_token', cleanToken)
+      if (result.processed > 0) {
         toast({
-          title: '🤖 Bot do Telegram validado com sucesso!',
-          description: `Conectado ao bot @${res.result.username} (${res.result.first_name}).`,
+          title: `📥 ${result.processed} nova(s) mensagem(ns) processada(s)!`,
+          description: 'Recibos e lançamentos foram criados e categorizados automaticamente.',
         })
-        // Automatically check current webhook info
-        handleCheckWebhookInfo(cleanToken)
-        setActiveStep('step3')
-      } else {
-        toast({
-          title: 'Token inválido',
-          description:
-            res?.description || 'O Telegram rejeitou o token. Verifique e tente novamente.',
-          variant: 'destructive',
-        })
-      }
-    } catch (err: any) {
-      toast({
-        title: 'Erro ao validar token',
-        description: err.message || 'Verifique a conexão ou se o token está correto.',
-        variant: 'destructive',
-      })
-    } finally {
-      setIsVerifying(false)
-    }
-  }
-
-  // 2. Check Webhook Info
-  const handleCheckWebhookInfo = async (tokenOverride?: string) => {
-    const token = tokenOverride || botToken.trim()
-    if (!token) return
-
-    setIsCheckingStatus(true)
-    try {
-      const res: any = await botService.manageTelegramWebhook({
-        bot_token: token,
-        action: 'getWebhookInfo',
-      })
-
-      if (res && res.ok && res.result) {
-        setWebhookInfo(res.result)
-      }
-    } catch (err: any) {
-      console.error('Error fetching webhook info:', err)
-    } finally {
-      setIsCheckingStatus(false)
-    }
-  }
-
-  // 3. Set Webhook with 1-Click
-  const handleSetWebhook = async () => {
-    const cleanToken = botToken.trim()
-    const cleanUrl = webhookUrl.trim()
-
-    if (!cleanToken) {
-      toast({
-        title: 'Token ausente',
-        description: 'Por favor, insira o token do bot.',
-        variant: 'destructive',
-      })
-      return
-    }
-    if (!cleanUrl) {
-      toast({
-        title: 'URL do Webhook ausente',
-        description: 'Informe a URL pública onde as mensagens serão recebidas.',
-        variant: 'destructive',
-      })
-      return
-    }
-
-    if (cleanUrl.includes('.internal.goskip.dev')) {
-      toast({
-        title: 'URL Interna Inválida',
-        description:
-          'A URL do webhook não pode conter domínio interno (.internal.goskip.dev). Use o domínio público do app.',
-        variant: 'destructive',
-      })
-      return
-    }
-
-    setIsSettingWebhook(true)
-    try {
-      const res: any = await botService.manageTelegramWebhook({
-        bot_token: cleanToken,
-        action: 'setWebhook',
-        webhook_url: cleanUrl,
-      })
-
-      if (res && res.ok) {
-        toast({
-          title: '🎉 Webhook do Telegram Ativado com Sucesso!',
-          description:
-            res.description ||
-            'O Telegram agora enviará todas as fotos e mensagens para o sistema.',
-        })
-        await handleCheckWebhookInfo(cleanToken)
-        setActiveStep('step4')
         if (onWebhookConfigured) onWebhookConfigured()
       } else {
         toast({
-          title: 'Falha ao configurar webhook',
-          description: res?.description || res?.error || 'Erro ao registrar Webhook no Telegram.',
-          variant: 'destructive',
+          title: '🔄 Polling executado com sucesso',
+          description: 'Nenhuma nova mensagem pendente no Telegram no momento.',
         })
       }
     } catch (err: any) {
       toast({
-        title: 'Erro ao configurar webhook',
-        description: err.message || 'Falha ao conectar com o Telegram.',
+        title: 'Erro ao executar polling',
+        description: err.message || 'Falha ao buscar atualizações do Telegram.',
         variant: 'destructive',
       })
     } finally {
-      setIsSettingWebhook(false)
+      setIsSyncingNow(false)
     }
   }
 
-  // 4. Delete Webhook (reset to polling)
-  const handleDeleteWebhook = async () => {
+  // Delete webhook to ensure polling mode works cleanly (prevent 405 error)
+  const handleEnsurePollingClean = async () => {
     const cleanToken = botToken.trim()
     if (!cleanToken) return
 
-    if (
-      !confirm(
-        'Deseja realmente remover o webhook ativo no Telegram? O bot parará de enviar mensagens automaticamente para esta URL.',
-      )
-    ) {
-      return
-    }
-
-    setIsDeletingWebhook(true)
+    setIsCleaningWebhook(true)
     try {
       const res: any = await botService.manageTelegramWebhook({
         bot_token: cleanToken,
@@ -256,10 +195,15 @@ export function TelegramWebhookConfig({ obras, onWebhookConfigured }: TelegramWe
 
       if (res && res.ok) {
         toast({
-          title: 'Webhook removido',
-          description: 'O webhook foi desativado no Telegram.',
+          title: '✅ Webhook desativado com sucesso!',
+          description: 'O bot agora está operando 100% em modo Polling Contínuo (getUpdates).',
         })
-        await handleCheckWebhookInfo(cleanToken)
+        await handleVerifyBot(cleanToken)
+      } else {
+        toast({
+          title: 'Resposta do Telegram',
+          description: res?.description || 'Webhook já estava desativado.',
+        })
       }
     } catch (err: any) {
       toast({
@@ -268,116 +212,226 @@ export function TelegramWebhookConfig({ obras, onWebhookConfigured }: TelegramWe
         variant: 'destructive',
       })
     } finally {
-      setIsDeletingWebhook(false)
+      setIsCleaningWebhook(false)
     }
   }
 
-  // Pre-generated cURL, Python, Node.js and Browser commands
-  const curlCommand = `curl -F "url=${webhookUrl}" https://api.telegram.org/bot${botToken || '<SEU_TOKEN>'}/setWebhook`
-  const getWebhookCurl = `curl https://api.telegram.org/bot${botToken || '<SEU_TOKEN>'}/getWebhookInfo`
-  const browserUrl = `https://api.telegram.org/bot${botToken || '<SEU_TOKEN>'}/setWebhook?url=${encodeURIComponent(webhookUrl)}`
+  const lastUpdateId = telegramState['last_update_id']?.value ?? 0
+  const lastPollAt = telegramState['last_poll_at']?.text_value
+    ? new Date(telegramState['last_poll_at'].text_value).toLocaleString('pt-BR')
+    : telegramState['last_update_id']?.updated
+      ? new Date(telegramState['last_update_id'].updated).toLocaleString('pt-BR')
+      : 'Ativo via Cron'
 
   return (
     <div className="space-y-6">
-      {/* Hero card / Welcome */}
-      <div className="bg-gradient-to-r from-sky-900 via-slate-900 to-indigo-950 text-white p-6 rounded-2xl border border-sky-800/60 shadow-md flex flex-col md:flex-row md:items-center justify-between gap-6">
+      {/* Hero card / Polling System Overview */}
+      <div className="bg-gradient-to-r from-sky-950 via-slate-900 to-indigo-950 text-white p-6 rounded-2xl border border-sky-800/60 shadow-md flex flex-col md:flex-row md:items-center justify-between gap-6">
         <div className="space-y-2 max-w-2xl">
-          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-sky-500/20 text-sky-300 border border-sky-400/30 text-xs font-semibold">
-            <Send className="w-3.5 h-3.5" />
-            <span>Assistente de Configuração do Telegram Bot</span>
+          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-400/30 text-xs font-semibold">
+            <Radio className="w-3.5 h-3.5 animate-pulse" />
+            <span>Sistema de Polling Automático Ativo</span>
           </div>
-          <h2 className="text-2xl font-black tracking-tight text-white">
-            Como Configurar o Webhook no Telegram?
+          <h2 className="text-2xl font-black tracking-tight text-white flex items-center gap-2">
+            Telegram Bot Polling (Contínuo)
           </h2>
           <p className="text-sm text-sky-100/80 leading-relaxed">
-            Como você já criou o bot no <strong>@BotFather</strong>, o próximo passo é associar a
-            URL do Webhook do seu Gerenciador de Obras ao bot. Assim, toda foto de recibo e mensagem
-            enviada no Telegram cai diretamente no sistema para leitura automática via IA.
+            O backend verifica novas fotos, recibos e mensagens enviadas ao seu bot a cada 10
+            segundos via <strong>Telegram getUpdates</strong>, parseia valores com Inteligência
+            Artificial e gera os lançamentos financeiros automaticamente.
           </p>
         </div>
 
-        {/* Status preview pill */}
-        <div className="p-4 rounded-xl bg-slate-950/70 border border-sky-800/40 shrink-0 space-y-2">
-          <span className="text-[11px] font-semibold uppercase text-sky-400 block tracking-wider">
-            Status do Webhook
-          </span>
-          <div className="flex items-center gap-2">
-            <span
-              className={`w-3 h-3 rounded-full animate-pulse ${
-                webhookInfo?.url ? 'bg-emerald-400' : 'bg-amber-400'
-              }`}
-            />
-            <span className="font-bold text-sm text-white">
-              {webhookInfo?.url ? 'Webhook Ativo' : 'Aguardando Ativação'}
+        {/* Polling Live Metric Pill */}
+        <div className="p-4 rounded-xl bg-slate-950/80 border border-sky-800/40 shrink-0 space-y-3 min-w-[220px]">
+          <div className="flex items-center justify-between">
+            <span className="text-[11px] font-semibold uppercase text-sky-400 block tracking-wider">
+              Status do Polling
+            </span>
+            <span className="flex h-2.5 w-2.5 relative">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
             </span>
           </div>
-          {webhookInfo?.url && (
-            <p
-              className="text-[11px] text-slate-300 font-mono truncate max-w-[200px]"
-              title={webhookInfo.url}
-            >
-              {webhookInfo.url}
+
+          <div className="space-y-1">
+            <div className="flex items-center gap-2">
+              <span className="font-bold text-sm text-emerald-400">Cron Ativo</span>
+              <Badge
+                variant="outline"
+                className="text-[10px] bg-emerald-950 text-emerald-300 border-emerald-600"
+              >
+                10s / 60s
+              </Badge>
+            </div>
+            <p className="text-[11px] text-slate-300 flex items-center gap-1 font-mono">
+              <Clock className="w-3 h-3 text-slate-400" />
+              {lastPollAt}
             </p>
-          )}
+          </div>
+
+          <div className="pt-2 border-t border-slate-800 flex justify-between items-center text-[11px]">
+            <span className="text-slate-400">Total Mensagens:</span>
+            <span className="font-bold text-white font-mono">{totalMessagesCount}</span>
+          </div>
         </div>
       </div>
 
-      {/* Step by step wizard */}
+      {/* Main Grid: Control Panel & Live State */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Left 2 cols: Step by Step interactive cards */}
+        {/* Left 2 Cols: Polling Status & Bot Config */}
         <div className="lg:col-span-2 space-y-6">
-          {/* Step 1: Obtenha o HTTP Token do BotFather */}
+          {/* Card 1: Live Status & Controls */}
           <Card className="bg-white border-slate-200 shadow-sm overflow-hidden">
             <CardHeader className="bg-slate-50/70 border-b border-slate-100 pb-3">
               <div className="flex items-center justify-between">
                 <CardTitle className="text-sm font-bold text-slate-900 flex items-center gap-2">
-                  <span className="w-6 h-6 rounded-full bg-sky-600 text-white flex items-center justify-center text-xs font-bold">
-                    1
+                  <Activity className="w-4 h-4 text-emerald-600" />
+                  Painel de Controle e Status do Polling
+                </CardTitle>
+                <Badge className="bg-emerald-600 text-white text-xs flex items-center gap-1">
+                  <CheckCircle2 className="w-3 h-3" />
+                  Pronto para Receber
+                </Badge>
+              </div>
+            </CardHeader>
+
+            <CardContent className="p-5 space-y-5 text-xs">
+              {/* Status Indicator Tiles */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-1">
+                  <span className="text-slate-500 text-[11px] font-medium flex items-center gap-1">
+                    <Database className="w-3.5 h-3.5 text-sky-600" />
+                    Último Update ID
                   </span>
-                  Pegar o HTTP Token do @BotFather
+                  <p className="text-lg font-bold font-mono text-slate-900">
+                    {lastUpdateId > 0 ? `#${lastUpdateId}` : 'Inicial (0)'}
+                  </p>
+                  <p className="text-[10px] text-slate-400">Ponto de partida no getUpdates</p>
+                </div>
+
+                <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-1">
+                  <span className="text-slate-500 text-[11px] font-medium flex items-center gap-1">
+                    <Layers className="w-3.5 h-3.5 text-indigo-600" />
+                    Mensagens no Banco
+                  </span>
+                  <p className="text-lg font-bold font-mono text-slate-900">{totalMessagesCount}</p>
+                  <p className="text-[10px] text-slate-400">Coleção telegram_messages</p>
+                </div>
+
+                <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-1">
+                  <span className="text-slate-500 text-[11px] font-medium flex items-center gap-1">
+                    <Radio className="w-3.5 h-3.5 text-emerald-600" />
+                    Modo de Recepção
+                  </span>
+                  <p className="text-lg font-bold text-emerald-700 font-medium flex items-center gap-1">
+                    Polling HTTP
+                  </p>
+                  <p className="text-[10px] text-slate-400">Sem necessidade de portas externas</p>
+                </div>
+              </div>
+
+              {/* Action Buttons: Sync Now & Cleanup */}
+              <div className="p-4 bg-slate-900 text-slate-100 rounded-xl space-y-3">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div>
+                    <h4 className="font-bold text-white text-xs flex items-center gap-1.5">
+                      <Zap className="w-4 h-4 text-amber-400 fill-amber-400" />
+                      Sincronização Imediata (Manual)
+                    </h4>
+                    <p className="text-slate-300 text-[11px]">
+                      Execute uma consulta imediata à API do Telegram para processar qualquer
+                      mensagem pendente.
+                    </p>
+                  </div>
+                  <Button
+                    onClick={handleSyncUpdatesNow}
+                    disabled={isSyncingNow}
+                    className="bg-emerald-500 hover:bg-emerald-600 text-white font-bold text-xs shrink-0 shadow-sm"
+                  >
+                    <RefreshCw
+                      className={`w-3.5 h-3.5 mr-1.5 ${isSyncingNow ? 'animate-spin' : ''}`}
+                    />
+                    {isSyncingNow ? 'Consultando...' : 'Buscar Novas Mensagens Agora'}
+                  </Button>
+                </div>
+
+                {lastSyncResult && (
+                  <div className="pt-2 border-t border-slate-800 text-[11px] text-slate-300 flex items-center justify-between">
+                    <span>
+                      Última verificação manual às <strong>{lastSyncResult.at}</strong>:
+                    </span>
+                    <Badge
+                      variant="outline"
+                      className="bg-slate-800 text-emerald-300 border-slate-700"
+                    >
+                      {lastSyncResult.processed} mensagens importadas
+                    </Badge>
+                  </div>
+                )}
+              </div>
+
+              {/* Webhook Warning check (if webhook is still set, offer 1-click delete to prevent 405) */}
+              {webhookInfo?.url && (
+                <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-amber-900 flex items-center justify-between gap-3">
+                  <div className="space-y-0.5">
+                    <span className="font-bold text-xs flex items-center gap-1 text-amber-950">
+                      <AlertCircle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                      Webhook ativo detectado ({webhookInfo.url})
+                    </span>
+                    <p className="text-[11px] text-amber-800">
+                      O Telegram não permite <code>getUpdates</code> quando um Webhook está
+                      registrado. Clique para remover e liberar o polling.
+                    </p>
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleEnsurePollingClean}
+                    disabled={isCleaningWebhook}
+                    className="border-amber-300 bg-white hover:bg-amber-100 text-amber-900 text-xs shrink-0 font-bold"
+                  >
+                    {isCleaningWebhook ? (
+                      <RefreshCw className="w-3.5 h-3.5 mr-1 animate-spin" />
+                    ) : (
+                      <Trash2 className="w-3.5 h-3.5 mr-1 text-amber-700" />
+                    )}
+                    Desativar Webhook
+                  </Button>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Card 2: Bot Token Configuration */}
+          <Card className="bg-white border-slate-200 shadow-sm overflow-hidden">
+            <CardHeader className="bg-slate-50/70 border-b border-slate-100 pb-3">
+              <div className="flex items-center justify-between">
+                <CardTitle className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                  <Bot className="w-4 h-4 text-sky-600" />
+                  Token do Bot no Telegram
                 </CardTitle>
                 <Badge variant="outline" className="text-xs bg-white text-slate-700">
-                  Já criou o bot?
+                  @BotFather
                 </Badge>
               </div>
             </CardHeader>
 
             <CardContent className="p-4 space-y-3 text-xs">
-              <p className="text-slate-600 leading-relaxed">
-                Quando você criou seu bot usando o comando <code>/newbot</code>, o{' '}
-                <strong>@BotFather</strong> te enviou uma mensagem com a frase{' '}
-                <em>"Use this token to access the HTTP API:"</em>.
-              </p>
-
-              <div className="p-3 bg-slate-900 text-slate-200 rounded-lg font-mono text-[11px] space-y-1">
-                <span className="text-slate-400 block font-sans font-bold text-[10px] uppercase">
-                  Exemplo de mensagem do @BotFather:
-                </span>
-                <p className="text-emerald-400">
-                  Done! Congratulations on your new bot.
-                  <br />
-                  Use this token to access the HTTP API:
-                  <br />
-                  <strong className="text-amber-300 font-bold">
-                    7192837482:AAH9fklzXq_dK9sL0...
-                  </strong>
-                </p>
-              </div>
-
-              <div className="space-y-1.5 pt-1">
+              <div className="space-y-1.5">
                 <Label htmlFor="botTokenInput" className="text-xs font-bold text-slate-800">
-                  Cole seu Token do Telegram Bot aqui:
+                  Token de Autenticação HTTP:
                 </Label>
                 <div className="flex gap-2">
                   <Input
                     id="botTokenInput"
-                    placeholder="Ex: 7192837482:AAH9fklzXq_dK9sL0vN1w..."
+                    placeholder="Ex: 8855089577:AAGwcjSJzSqZp8u_zPu2DN2V36MY23LhY2Y"
                     value={botToken}
                     onChange={(e) => setBotToken(e.target.value)}
                     className="font-mono text-xs bg-slate-50 border-slate-300"
                   />
                   <Button
-                    onClick={handleVerifyBot}
+                    onClick={() => handleVerifyBot()}
                     disabled={isVerifying || !botToken.trim()}
                     className="bg-sky-600 hover:bg-sky-700 text-white shrink-0 font-semibold text-xs"
                   >
@@ -391,7 +445,7 @@ export function TelegramWebhookConfig({ obras, onWebhookConfigured }: TelegramWe
                 </div>
               </div>
 
-              {/* Verified Bot card */}
+              {/* Bot profile tile if loaded */}
               {botProfile && (
                 <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-lg flex items-center justify-between">
                   <div className="flex items-center gap-3">
@@ -418,395 +472,103 @@ export function TelegramWebhookConfig({ obras, onWebhookConfigured }: TelegramWe
               )}
             </CardContent>
           </Card>
-
-          {/* Step 2: URL do Webhook do Gerenciador de Obras */}
-          <Card className="bg-white border-slate-200 shadow-sm overflow-hidden">
-            <CardHeader className="bg-slate-50/70 border-b border-slate-100 pb-3">
-              <div className="flex items-center justify-between">
-                <CardTitle className="text-sm font-bold text-slate-900 flex items-center gap-2">
-                  <span className="w-6 h-6 rounded-full bg-sky-600 text-white flex items-center justify-center text-xs font-bold">
-                    2
-                  </span>
-                  URL do Webhook do Gerenciador de Obras
-                </CardTitle>
-                <Badge variant="outline" className="text-xs bg-white text-slate-700">
-                  Endpoint Seguro (HTTPS)
-                </Badge>
-              </div>
-            </CardHeader>
-
-            <CardContent className="p-4 space-y-3 text-xs">
-              <p className="text-slate-600">
-                Esta é a URL pública que o Telegram chamará via requisição <code>POST</code> toda
-                vez que alguém enviar uma foto de nota fiscal, recibo ou comprovante de pagamento
-                para o bot.
-              </p>
-
-              <div className="space-y-1.5">
-                <Label htmlFor="webhookUrlInput" className="text-xs font-bold text-slate-800">
-                  URL de Destino do Webhook (Pronta):
-                </Label>
-                <div className="flex gap-2">
-                  <Input
-                    id="webhookUrlInput"
-                    value={webhookUrl}
-                    onChange={(e) => setWebhookUrl(e.target.value)}
-                    className="font-mono text-xs bg-slate-50 border-slate-300 text-slate-900 font-medium"
-                  />
-                  <Button
-                    variant="outline"
-                    onClick={() => copyToClipboard(webhookUrl, 'webhook_url')}
-                    className="shrink-0 border-slate-300 text-slate-700 text-xs"
-                  >
-                    {copiedKey === 'webhook_url' ? (
-                      <Check className="w-3.5 h-3.5 text-emerald-600" />
-                    ) : (
-                      <Copy className="w-3.5 h-3.5" />
-                    )}
-                    Copiar URL
-                  </Button>
-                </div>
-              </div>
-
-              <div className="p-3 bg-amber-50/80 rounded-lg border border-amber-200 text-amber-900 space-y-1">
-                <span className="font-bold flex items-center gap-1 text-[11px]">
-                  <Info className="w-3.5 h-3.5 text-amber-600" />
-                  Importante sobre o Telegram Webhook:
-                </span>
-                <p className="text-[11px] text-amber-800">
-                  O Telegram exige que a URL do webhook utilize protocolo <strong>
-                    HTTPS
-                  </strong>{' '}
-                  válido com porta padrão 443 (ou 80/88/8443). Nossa infraestrutura já provê SSL
-                  automático.
-                </p>
-              </div>
-            </CardContent>
-          </Card>
-
-          {/* Step 3: Registrar o Webhook no Telegram (1-Clique ou Manual) */}
-          <Card className="bg-white border-slate-200 shadow-sm overflow-hidden">
-            <CardHeader className="bg-slate-50/70 border-b border-slate-100 pb-3">
-              <div className="flex items-center justify-between">
-                <CardTitle className="text-sm font-bold text-slate-900 flex items-center gap-2">
-                  <span className="w-6 h-6 rounded-full bg-emerald-600 text-white flex items-center justify-center text-xs font-bold">
-                    3
-                  </span>
-                  Ativar o Webhook no Telegram
-                </CardTitle>
-                <Badge className="bg-emerald-600 text-white text-[10px]">
-                  Recomendado: 1 Clique
-                </Badge>
-              </div>
-            </CardHeader>
-
-            <CardContent className="p-4 space-y-4 text-xs">
-              {/* Opção A: 1-Clique Direto pelo Sistema */}
-              <div className="p-4 rounded-xl bg-emerald-950/5 border border-emerald-200 space-y-3">
-                <div className="flex items-start justify-between gap-2">
-                  <div>
-                    <h4 className="font-bold text-sm text-emerald-950 flex items-center gap-1.5">
-                      <Zap className="w-4 h-4 text-amber-500 fill-amber-500" />
-                      Opção 1: Configuração Automática em 1 Clique
-                    </h4>
-                    <p className="text-emerald-800 text-xs mt-0.5">
-                      O sistema se comunica diretamente com a API do Telegram e ativa o webhook
-                      imediatamente.
-                    </p>
-                  </div>
-                </div>
-
-                <div className="flex flex-wrap gap-2 pt-1">
-                  <Button
-                    onClick={handleSetWebhook}
-                    disabled={isSettingWebhook || !botToken.trim()}
-                    className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-md shadow-emerald-600/20"
-                  >
-                    {isSettingWebhook ? (
-                      <RefreshCw className="w-4 h-4 mr-1.5 animate-spin" />
-                    ) : (
-                      <CheckCircle2 className="w-4 h-4 mr-1.5" />
-                    )}
-                    Ativar Webhook Agora (setWebhook)
-                  </Button>
-
-                  <Button
-                    variant="outline"
-                    onClick={() => handleCheckWebhookInfo()}
-                    disabled={isCheckingStatus || !botToken.trim()}
-                    className="border-slate-300 text-slate-700 text-xs bg-white"
-                  >
-                    {isCheckingStatus ? (
-                      <RefreshCw className="w-3.5 h-3.5 mr-1.5 animate-spin" />
-                    ) : (
-                      <Radio className="w-3.5 h-3.5 mr-1.5 text-sky-600" />
-                    )}
-                    Consultar Status Atual (getWebhookInfo)
-                  </Button>
-
-                  {webhookInfo?.url && (
-                    <Button
-                      variant="ghost"
-                      onClick={handleDeleteWebhook}
-                      disabled={isDeletingWebhook}
-                      className="text-red-600 hover:bg-red-50 text-xs"
-                    >
-                      <Trash2 className="w-3.5 h-3.5 mr-1 text-red-500" />
-                      Remover Webhook
-                    </Button>
-                  )}
-                </div>
-              </div>
-
-              {/* Opção B: Métodos Manuais (cURL, Navegador, etc.) */}
-              <div className="space-y-3 pt-2">
-                <h4 className="font-bold text-slate-800 text-xs flex items-center gap-1.5">
-                  <Terminal className="w-4 h-4 text-slate-600" />
-                  Opção 2: Métodos Manuais Alternativos
-                </h4>
-
-                <Tabs defaultValue="curl" className="w-full">
-                  <TabsList className="bg-slate-100 p-0.5 h-8">
-                    <TabsTrigger value="curl" className="text-xs h-7">
-                      cURL (Terminal)
-                    </TabsTrigger>
-                    <TabsTrigger value="browser" className="text-xs h-7">
-                      Via Navegador (URL)
-                    </TabsTrigger>
-                    <TabsTrigger value="status" className="text-xs h-7">
-                      Consultar Status
-                    </TabsTrigger>
-                  </TabsList>
-
-                  {/* Tab cURL */}
-                  <TabsContent value="curl" className="pt-2 space-y-2">
-                    <p className="text-slate-600 text-[11px]">
-                      Abra o terminal do seu computador (PowerShell, Terminal macOS/Linux) e
-                      execute:
-                    </p>
-                    <div className="relative group">
-                      <pre className="p-3 bg-slate-900 text-amber-300 rounded-lg font-mono text-[11px] overflow-x-auto whitespace-pre-wrap break-all">
-                        {curlCommand}
-                      </pre>
-                      <button
-                        onClick={() => copyToClipboard(curlCommand, 'curl')}
-                        className="absolute right-2 top-2 p-1.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white"
-                        title="Copiar comando cURL"
-                      >
-                        {copiedKey === 'curl' ? (
-                          <Check className="w-3.5 h-3.5 text-emerald-400" />
-                        ) : (
-                          <Copy className="w-3.5 h-3.5" />
-                        )}
-                      </button>
-                    </div>
-                  </TabsContent>
-
-                  {/* Tab Browser */}
-                  <TabsContent value="browser" className="pt-2 space-y-2">
-                    <p className="text-slate-600 text-[11px]">
-                      Você também pode simplesmente colar esta URL na barra de endereços de qualquer
-                      navegador:
-                    </p>
-                    <div className="relative group">
-                      <pre className="p-3 bg-slate-900 text-sky-300 rounded-lg font-mono text-[11px] overflow-x-auto whitespace-pre-wrap break-all">
-                        {browserUrl}
-                      </pre>
-                      <button
-                        onClick={() => copyToClipboard(browserUrl, 'browser')}
-                        className="absolute right-2 top-2 p-1.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white"
-                        title="Copiar Link"
-                      >
-                        {copiedKey === 'browser' ? (
-                          <Check className="w-3.5 h-3.5 text-emerald-400" />
-                        ) : (
-                          <Copy className="w-3.5 h-3.5" />
-                        )}
-                      </button>
-                    </div>
-                  </TabsContent>
-
-                  {/* Tab Status */}
-                  <TabsContent value="status" className="pt-2 space-y-2">
-                    <p className="text-slate-600 text-[11px]">
-                      Para ver se o Telegram está entregando as mensagens ou se houve erros de
-                      conexão:
-                    </p>
-                    <div className="relative group">
-                      <pre className="p-3 bg-slate-900 text-emerald-300 rounded-lg font-mono text-[11px] overflow-x-auto whitespace-pre-wrap break-all">
-                        {getWebhookCurl}
-                      </pre>
-                      <button
-                        onClick={() => copyToClipboard(getWebhookCurl, 'get_webhook')}
-                        className="absolute right-2 top-2 p-1.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white"
-                      >
-                        {copiedKey === 'get_webhook' ? (
-                          <Check className="w-3.5 h-3.5 text-emerald-400" />
-                        ) : (
-                          <Copy className="w-3.5 h-3.5" />
-                        )}
-                      </button>
-                    </div>
-                  </TabsContent>
-                </Tabs>
-              </div>
-            </CardContent>
-          </Card>
         </div>
 
-        {/* Right 1 col: Live Inspection & Telegram BotFather Tips */}
+        {/* Right 1 Col: Instructions & Live Telegram Diagnostics */}
         <div className="space-y-6">
-          {/* Live Webhook Inspection Card */}
+          {/* Diagnostic Card */}
           <Card className="bg-slate-900 text-slate-100 border-slate-800 shadow-md">
             <CardHeader className="pb-3 border-b border-slate-800">
               <div className="flex items-center justify-between">
                 <CardTitle className="text-sm font-bold text-white flex items-center gap-2">
                   <Radio className="w-4 h-4 text-emerald-400" />
-                  Diagnóstico da API Telegram
+                  Diagnóstico Telegram State
                 </CardTitle>
                 <button
-                  onClick={() => handleCheckWebhookInfo()}
-                  disabled={isCheckingStatus || !botToken.trim()}
+                  onClick={() => {
+                    refreshBackendData()
+                    handleVerifyBot()
+                  }}
+                  disabled={isVerifying}
                   className="p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-white"
                   title="Atualizar diagnóstico"
                 >
-                  <RefreshCw className={`w-3.5 h-3.5 ${isCheckingStatus ? 'animate-spin' : ''}`} />
+                  <RefreshCw className={`w-3.5 h-3.5 ${isVerifying ? 'animate-spin' : ''}`} />
                 </button>
               </div>
             </CardHeader>
 
             <CardContent className="p-4 space-y-3 text-xs">
-              {webhookInfo ? (
-                <div className="space-y-2.5">
-                  <div className="flex justify-between items-center border-b border-slate-800 pb-2">
-                    <span className="text-slate-400">URL Registrada:</span>
-                    <span
-                      className="font-mono text-[11px] text-amber-400 max-w-[170px] truncate"
-                      title={webhookInfo.url}
-                    >
-                      {webhookInfo.url || 'Nenhuma (Polling)'}
-                    </span>
-                  </div>
-
-                  <div className="flex justify-between items-center border-b border-slate-800 pb-2">
-                    <span className="text-slate-400">Atualizações pendentes:</span>
-                    <span className="font-bold text-white font-mono">
-                      {webhookInfo.pending_update_count || 0}
-                    </span>
-                  </div>
-
-                  <div className="flex justify-between items-center border-b border-slate-800 pb-2">
-                    <span className="text-slate-400">Conexões simultâneas:</span>
-                    <span className="font-bold text-white font-mono">
-                      {webhookInfo.max_connections || 40}
-                    </span>
-                  </div>
-
-                  {webhookInfo.last_error_message && (
-                    <div className="p-2.5 rounded bg-red-950/60 border border-red-800 text-red-200 text-[11px] space-y-1">
-                      <span className="font-bold block flex items-center gap-1">
-                        <AlertCircle className="w-3.5 h-3.5 text-red-400" />
-                        Último erro registrado pelo Telegram:
-                      </span>
-                      <p className="font-mono text-[10px]">{webhookInfo.last_error_message}</p>
-                    </div>
-                  )}
-
-                  {!webhookInfo.last_error_message && webhookInfo.url && (
-                    <div className="p-2.5 rounded bg-emerald-950/60 border border-emerald-800 text-emerald-300 text-[11px] flex items-center gap-2">
-                      <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-                      <span>Telegram pronto e sincronizando mensagens!</span>
-                    </div>
-                  )}
-                </div>
-              ) : (
-                <div className="text-center py-6 text-slate-400 space-y-2">
-                  <Terminal className="w-8 h-8 mx-auto text-slate-600" />
-                  <p className="text-xs">
-                    Insira o Token do Bot no Passo 1 para inspecionar o status do webhook.
-                  </p>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-
-          {/* Comandos Úteis do BotFather */}
-          <Card className="bg-white border-slate-200 shadow-sm">
-            <CardHeader className="pb-2">
-              <CardTitle className="text-xs font-bold text-slate-800 uppercase flex items-center gap-1.5">
-                <HelpCircle className="w-4 h-4 text-sky-600" />
-                Guia Rápido de Comandos @BotFather
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3 text-xs">
-              <div className="space-y-2 text-slate-600 text-[11px]">
-                <div className="p-2 bg-slate-50 rounded border border-slate-200">
-                  <strong className="text-sky-700 font-mono">/token</strong>
-                  <p className="text-slate-500 mt-0.5">
-                    Recupera ou gera novamente o token de um bot existente.
-                  </p>
+              <div className="space-y-2.5">
+                <div className="flex justify-between items-center border-b border-slate-800 pb-2">
+                  <span className="text-slate-400">Bot:</span>
+                  <span className="font-bold text-white font-mono">
+                    {botProfile?.username ? `@${botProfile.username}` : 'Carregando...'}
+                  </span>
                 </div>
 
-                <div className="p-2 bg-slate-50 rounded border border-slate-200">
-                  <strong className="text-sky-700 font-mono">/setdescription</strong>
-                  <p className="text-slate-500 mt-0.5">
-                    Define o texto que os membros veem antes de clicar em Começar (ex: "Envie fotos
-                    de recibos").
-                  </p>
+                <div className="flex justify-between items-center border-b border-slate-800 pb-2">
+                  <span className="text-slate-400">Modo de Operação:</span>
+                  <Badge
+                    variant="outline"
+                    className="bg-emerald-950 text-emerald-300 border-emerald-600 text-[10px]"
+                  >
+                    Polling Backend + Cron
+                  </Badge>
                 </div>
 
-                <div className="p-2 bg-slate-50 rounded border border-slate-200">
-                  <strong className="text-sky-700 font-mono">/setuserpic</strong>
-                  <p className="text-slate-500 mt-0.5">
-                    Define a foto do perfil do seu bot (ex: logo da construtora).
-                  </p>
+                <div className="flex justify-between items-center border-b border-slate-800 pb-2">
+                  <span className="text-slate-400">Offset (last_update_id):</span>
+                  <span className="font-bold text-amber-400 font-mono">{lastUpdateId}</span>
                 </div>
 
-                <div className="p-2 bg-slate-50 rounded border border-slate-200">
-                  <strong className="text-sky-700 font-mono">/setcommands</strong>
-                  <p className="text-slate-500 mt-0.5">
-                    Configura comandos de ajuda no menu do chat.
-                  </p>
+                <div className="flex justify-between items-center border-b border-slate-800 pb-2">
+                  <span className="text-slate-400">Última Execução:</span>
+                  <span className="text-slate-300 font-mono text-[11px] text-right">
+                    {lastPollAt}
+                  </span>
                 </div>
-              </div>
 
-              <div className="pt-2 border-t border-slate-100 flex justify-between items-center text-[11px]">
-                <span className="text-slate-500">Abrir BotFather no Telegram:</span>
-                <a
-                  href="https://t.me/BotFather"
-                  target="_blank"
-                  rel="noreferrer"
-                  className="text-sky-600 font-bold hover:underline flex items-center gap-1"
-                >
-                  @BotFather
-                  <ExternalLink className="w-3 h-3" />
-                </a>
+                <div className="p-2.5 rounded bg-emerald-950/60 border border-emerald-800 text-emerald-300 text-[11px] flex items-center gap-2">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                  <span>Backend processando mensagens via onRecordCreate pipeline.</span>
+                </div>
               </div>
             </CardContent>
           </Card>
 
-          {/* Passo 4: Teste Real */}
+          {/* Test real guide */}
           <Card className="bg-gradient-to-br from-amber-50 to-orange-50 border-amber-200 shadow-sm">
             <CardHeader className="pb-2">
               <CardTitle className="text-xs font-bold text-amber-950 uppercase flex items-center gap-1.5">
                 <Sparkles className="w-4 h-4 text-amber-600" />
-                Como Testar o Robô no Telegram
+                Como Enviar Lançamentos pelo Telegram
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-2.5 text-xs text-amber-900 leading-relaxed">
               <ol className="list-decimal pl-4 space-y-1.5 text-[11px]">
                 <li>Abra o Telegram no seu celular ou desktop.</li>
                 <li>
-                  Procure pelo seu bot digitando{' '}
-                  <code>@{botProfile?.username || 'seu_bot_username'}</code>.
+                  Inicie conversa com{' '}
+                  <a
+                    href={`https://t.me/${botProfile?.username || 'ConstrutoraGestaoBot'}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="font-bold underline text-amber-950"
+                  >
+                    @{botProfile?.username || 'ConstrutoraGestaoBot'}
+                  </a>
+                  .
                 </li>
                 <li>
-                  Envie uma foto de recibo com a legenda:{' '}
-                  <em>"50 sacos de cimento Votoran para obra R$ 1.800,00"</em>.
+                  Envie uma foto de nota fiscal com a legenda:
+                  <div className="p-1.5 my-1 bg-amber-100/80 rounded font-mono text-[10px] text-amber-950 border border-amber-300/60">
+                    "50 sacos de cimento Votoran para obra R$ 1.800,00"
+                  </div>
                 </li>
                 <li>
-                  O bot recebe no Webhook, nossa IA categoriza em <strong>materials</strong> e
-                  adiciona no extrato da obra e na planilha!
+                  O Polling captura a mensagem, a IA categoriza em <strong>materiais</strong> e o
+                  lançamento é registrado automaticamente no extrato!
                 </li>
               </ol>
             </CardContent>
