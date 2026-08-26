@@ -197,6 +197,7 @@ export function TransactionsListPage({
                   <th className="py-3 px-4">Categoria</th>
                   <th className="py-3 px-4">Descrição</th>
                   <th className="py-3 px-4 text-right">Valor</th>
+                  <th className="py-3 px-4 text-center">Status</th>
                   <th className="py-3 px-4 text-center">Origem</th>
                   <th className="py-3 px-4 text-center">Comprovante</th>
                   <th className="py-3 px-4 text-right">Ações</th>
@@ -205,7 +206,7 @@ export function TransactionsListPage({
               <tbody className="divide-y divide-slate-100">
                 {filteredTransactions.length === 0 ? (
                   <tr>
-                    <td colSpan={9} className="py-10 text-center text-slate-400">
+                    <td colSpan={10} className="py-10 text-center text-slate-400">
                       Nenhum lançamento encontrado.
                     </td>
                   </tr>
@@ -257,6 +258,21 @@ export function TransactionsListPage({
                           {Number(tx.amount || 0).toLocaleString('pt-BR', {
                             minimumFractionDigits: 2,
                           })}
+                        </td>
+                        <td className="py-3 px-4 whitespace-nowrap text-center">
+                          {tx.status === 'pending' ? (
+                            <Badge className="bg-amber-100 text-amber-800 border-amber-300 text-[10px]">
+                              Pendente
+                            </Badge>
+                          ) : tx.status === 'reviewed' ? (
+                            <Badge className="bg-emerald-100 text-emerald-800 border-emerald-300 text-[10px]">
+                              Revisado
+                            </Badge>
+                          ) : (
+                            <Badge variant="outline" className="text-[10px] text-slate-500">
+                              Confirmado
+                            </Badge>
+                          )}
                         </td>
                         <td className="py-3 px-4 whitespace-nowrap text-center">
                           <Badge

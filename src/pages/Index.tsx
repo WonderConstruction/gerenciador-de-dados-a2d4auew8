@@ -147,6 +147,7 @@ export default function Index() {
           onSelectObra={handleSelectObra}
           onOpenNewObra={handleOpenNewObra}
           onOpenNewTransaction={handleOpenNewTransaction}
+          onRefreshData={loadAllData}
         />
       )}
 
@@ -157,6 +158,7 @@ export default function Index() {
           onSelectObra={handleSelectObra}
           onOpenNewObra={handleOpenNewObra}
           onOpenNewTransaction={handleOpenNewTransaction}
+          onRefreshData={loadAllData}
         />
       )}
 

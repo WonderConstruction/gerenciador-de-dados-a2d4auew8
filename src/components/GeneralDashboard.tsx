@@ -1,10 +1,17 @@
 import { useState, useMemo } from 'react'
-import { Obra, Transaction, STATUS_LABELS } from '@/types'
+import { Obra, Transaction, STATUS_LABELS, CATEGORY_LABELS, TransactionCategory } from '@/types'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import { Progress } from '@/components/ui/progress'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import {
   Building2,
   TrendingUp,
@@ -18,7 +25,17 @@ import {
   ExternalLink,
   Receipt,
   FileSpreadsheet,
+  Send,
+  Sparkles,
+  Loader2,
+  Calendar,
+  Check,
+  Edit2,
+  Trash2,
 } from 'lucide-react'
+import { transactionsService } from '@/services/transactions'
+import { googleSheetsService } from '@/services/googleSheets'
+import { useToast } from '@/hooks/use-toast'
 
 interface GeneralDashboardProps {
   obras: Obra[]
@@ -26,6 +43,7 @@ interface GeneralDashboardProps {
   onSelectObra: (obraId: string) => void
   onOpenNewObra: () => void
   onOpenNewTransaction: (obraId?: string) => void
+  onRefreshData?: () => void
 }
 
 export function GeneralDashboard({
@@ -34,8 +52,26 @@ export function GeneralDashboard({
   onSelectObra,
   onOpenNewObra,
   onOpenNewTransaction,
+  onRefreshData,
 }: GeneralDashboardProps) {
+  const { toast } = useToast()
   const [searchTerm, setSearchTerm] = useState('')
+  const [reviewingTxId, setReviewingTxId] = useState<string | null>(null)
+  const [isSyncingAll, setIsSyncingAll] = useState(false)
+  const [editingTx, setEditingTx] = useState<{
+    id: string
+    amount: string
+    category: TransactionCategory
+    obra_id: string
+    description: string
+  } | null>(null)
+
+  // Pending receipts (source telegram or pending status)
+  const pendingTransactions = useMemo(() => {
+    return transactions.filter(
+      (t) => t.status === 'pending' || (t.source === 'telegram' && !t.status),
+    )
+  }, [transactions])
 
   // Overall calculations
   const stats = useMemo(() => {
@@ -48,6 +84,7 @@ export function GeneralDashboard({
     })
 
     transactions.forEach((tx) => {
+      // only count reviewed or non-pending transactions in totals if amount > 0
       const amt = Number(tx.amount) || 0
       if (tx.type === 'income') totalIncome += amt
       else totalExpenses += amt
@@ -107,6 +144,141 @@ export function GeneralDashboard({
     )
   }, [obrasData, searchTerm])
 
+  const getObraName = (obraId?: string) => {
+    if (!obraId) return 'Sem obra vinculada'
+    const found = obras.find((o) => o.id === obraId)
+    return found ? found.name : 'Obra Geral'
+  }
+
+  // Handle Review & Confirmation of Pending Transaction
+  const handleConfirmTransaction = async (tx: Transaction) => {
+    setReviewingTxId(tx.id)
+    try {
+      const targetObra = obras.find((o) => o.id === tx.obra_id) || obras[0]
+
+      // Update status to 'reviewed'
+      const updatedTx = await transactionsService.update(tx.id, {
+        status: 'reviewed',
+      })
+
+      // Send/Sync to Google Sheets service
+      const syncResult = await googleSheetsService.syncTransactionToSheet(
+        { ...tx, status: 'reviewed' },
+        targetObra,
+      )
+
+      toast({
+        title: 'Recibo Confirmado!',
+        description: `Lançamento de R$ ${Number(tx.amount || 0).toFixed(2)} aprovado e enviado para a planilha da obra.`,
+      })
+
+      if (onRefreshData) onRefreshData()
+    } catch (err: any) {
+      toast({
+        title: 'Erro ao confirmar',
+        description: err.message || 'Não foi possível confirmar o lançamento.',
+        variant: 'destructive',
+      })
+    } finally {
+      setReviewingTxId(null)
+    }
+  }
+
+  // Handle Quick Edit Save for a Pending Transaction
+  const handleSaveEdit = async () => {
+    if (!editingTx) return
+    setReviewingTxId(editingTx.id)
+    try {
+      const parsedAmt = parseFloat(editingTx.amount) || 0
+      await transactionsService.update(editingTx.id, {
+        amount: parsedAmt,
+        category: editingTx.category,
+        obra_id: editingTx.obra_id,
+        description: editingTx.description,
+        status: 'reviewed',
+      })
+
+      const targetObra = obras.find((o) => o.id === editingTx.obra_id)
+      await googleSheetsService.syncTransactionToSheet(
+        {
+          id: editingTx.id,
+          amount: parsedAmt,
+          category: editingTx.category,
+          obra_id: editingTx.obra_id,
+          description: editingTx.description,
+          date: new Date().toISOString(),
+          type: 'expense',
+          user_id: '',
+          created: '',
+          updated: '',
+          status: 'reviewed',
+        },
+        targetObra,
+      )
+
+      toast({
+        title: 'Recibo Editado e Confirmado!',
+        description: 'Lançamento atualizado com sucesso e sincronizado no Google Sheets.',
+      })
+      setEditingTx(null)
+      if (onRefreshData) onRefreshData()
+    } catch (err: any) {
+      toast({
+        title: 'Erro ao salvar edição',
+        description: err.message,
+        variant: 'destructive',
+      })
+    } finally {
+      setReviewingTxId(null)
+    }
+  }
+
+  // Batch Confirm All Pending Receipts
+  const handleConfirmAllPending = async () => {
+    if (pendingTransactions.length === 0) return
+    setIsSyncingAll(true)
+    try {
+      let count = 0
+      for (const tx of pendingTransactions) {
+        const targetObra = obras.find((o) => o.id === tx.obra_id) || obras[0]
+        await transactionsService.update(tx.id, { status: 'reviewed' })
+        await googleSheetsService.syncTransactionToSheet({ ...tx, status: 'reviewed' }, targetObra)
+        count++
+      }
+
+      toast({
+        title: 'Todos os Recibos Confirmados!',
+        description: `${count} lançamento(s) do Telegram foram aprovados e enviados para o Google Sheets.`,
+      })
+      if (onRefreshData) onRefreshData()
+    } catch (err: any) {
+      toast({
+        title: 'Erro no processamento',
+        description: err.message,
+        variant: 'destructive',
+      })
+    } finally {
+      setIsSyncingAll(false)
+    }
+  }
+
+  const handleDeletePending = async (txId: string) => {
+    try {
+      await transactionsService.delete(txId)
+      toast({
+        title: 'Recibo descartado',
+        description: 'A mensagem foi removida da lista de pendentes.',
+      })
+      if (onRefreshData) onRefreshData()
+    } catch (err: any) {
+      toast({
+        title: 'Erro ao excluir',
+        description: err.message,
+        variant: 'destructive',
+      })
+    }
+  }
+
   return (
     <div className="space-y-6">
       {/* Header with Title & Action */}
@@ -116,7 +288,7 @@ export function GeneralDashboard({
             Painel Geral de Obras
           </h1>
           <p className="text-sm text-slate-500 mt-1">
-            Visão consolidada do fluxo de caixa e orçamento de todas as suas construções.
+            Visão consolidada do fluxo de caixa, orçamento e automação de recibos.
           </p>
         </div>
 
@@ -138,6 +310,258 @@ export function GeneralDashboard({
           </Button>
         </div>
       </div>
+
+      {/* Telegram Automation Alert & Pending Review Banner */}
+      {pendingTransactions.length > 0 && (
+        <div className="bg-gradient-to-r from-amber-500/10 via-amber-500/5 to-transparent border-2 border-amber-500/40 rounded-xl p-4 sm:p-5 shadow-sm space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="flex items-start gap-3">
+              <div className="p-2.5 rounded-lg bg-amber-500 text-slate-950 shadow-sm shrink-0 mt-0.5">
+                <Sparkles className="w-5 h-5 animate-pulse" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <h3 className="text-base sm:text-lg font-bold text-slate-900">
+                    Você tem {pendingTransactions.length} novo
+                    {pendingTransactions.length > 1 ? 's' : ''} recibo
+                    {pendingTransactions.length > 1 ? 's' : ''} do Telegram para revisar
+                  </h3>
+                  <Badge className="bg-amber-500 text-slate-950 font-bold hover:bg-amber-500 text-xs">
+                    Pendente de Aprovação
+                  </Badge>
+                </div>
+                <p className="text-xs sm:text-sm text-slate-600 mt-0.5">
+                  As mensagens recebidas pelo bot foram processadas e categorizadas. Ao clicar em{' '}
+                  <strong>"Confirmar"</strong>, o status muda para <strong>reviewed</strong> e os
+                  dados são sincronizados diretamente na planilha da obra no Google Sheets.
+                </p>
+              </div>
+            </div>
+
+            <Button
+              size="sm"
+              onClick={handleConfirmAllPending}
+              disabled={isSyncingAll}
+              className="bg-emerald-600 hover:bg-emerald-700 text-white font-semibold shrink-0 shadow-sm"
+            >
+              {isSyncingAll ? (
+                <Loader2 className="w-4 h-4 mr-1.5 animate-spin" />
+              ) : (
+                <CheckCircle2 className="w-4 h-4 mr-1.5" />
+              )}
+              Confirmar Todos ({pendingTransactions.length})
+            </Button>
+          </div>
+
+          {/* Pending Receipts Cards Grid */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
+            {pendingTransactions.map((tx) => {
+              const catCfg = CATEGORY_LABELS[tx.category] || CATEGORY_LABELS.materials
+              const isEditingThis = editingTx?.id === tx.id
+              const isConfirmingThis = reviewingTxId === tx.id
+
+              if (isEditingThis && editingTx) {
+                return (
+                  <div
+                    key={tx.id}
+                    className="p-3.5 rounded-lg bg-white border-2 border-amber-400 shadow-sm space-y-3"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                        <Edit2 className="w-3.5 h-3.5 text-amber-600" />
+                        Editar Lançamento
+                      </span>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => setEditingTx(null)}
+                        className="h-6 px-2 text-xs text-slate-400 hover:text-slate-700"
+                      >
+                        Cancelar
+                      </Button>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2">
+                      <div className="space-y-1">
+                        <span className="text-[10px] uppercase font-bold text-slate-500">
+                          Valor (R$)
+                        </span>
+                        <Input
+                          type="number"
+                          step="0.01"
+                          value={editingTx.amount}
+                          onChange={(e) => setEditingTx({ ...editingTx, amount: e.target.value })}
+                          className="h-8 text-xs font-bold"
+                          placeholder="0.00"
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <span className="text-[10px] uppercase font-bold text-slate-500">Obra</span>
+                        <Select
+                          value={editingTx.obra_id}
+                          onValueChange={(val) => setEditingTx({ ...editingTx, obra_id: val })}
+                        >
+                          <SelectTrigger className="h-8 text-xs bg-slate-50">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {obras.map((o) => (
+                              <SelectItem key={o.id} value={o.id}>
+                                {o.name}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </div>
+
+                    <div className="space-y-1">
+                      <span className="text-[10px] uppercase font-bold text-slate-500">
+                        Categoria
+                      </span>
+                      <Select
+                        value={editingTx.category}
+                        onValueChange={(val: TransactionCategory) =>
+                          setEditingTx({ ...editingTx, category: val })
+                        }
+                      >
+                        <SelectTrigger className="h-8 text-xs bg-slate-50">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {Object.entries(CATEGORY_LABELS).map(([k, v]) => (
+                            <SelectItem key={k} value={k}>
+                              {v.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    <div className="space-y-1">
+                      <span className="text-[10px] uppercase font-bold text-slate-500">
+                        Descrição
+                      </span>
+                      <Input
+                        value={editingTx.description}
+                        onChange={(e) =>
+                          setEditingTx({ ...editingTx, description: e.target.value })
+                        }
+                        className="h-8 text-xs"
+                      />
+                    </div>
+
+                    <div className="flex justify-end gap-2 pt-1 border-t border-slate-100">
+                      <Button
+                        size="sm"
+                        onClick={handleSaveEdit}
+                        disabled={isConfirmingThis}
+                        className="h-7 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs"
+                      >
+                        {isConfirmingThis ? (
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        ) : (
+                          <Check className="w-3.5 h-3.5 mr-1" />
+                        )}
+                        Salvar e Confirmar
+                      </Button>
+                    </div>
+                  </div>
+                )
+              }
+
+              return (
+                <div
+                  key={tx.id}
+                  className="p-3.5 rounded-lg bg-white border border-amber-200/80 shadow-sm flex flex-col justify-between hover:border-amber-400 transition"
+                >
+                  <div className="space-y-2">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span
+                          className={`inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold border ${catCfg.bg}`}
+                        >
+                          {catCfg.label}
+                        </span>
+                        <Badge
+                          variant="outline"
+                          className="text-[10px] bg-slate-50 text-slate-700 border-slate-200"
+                        >
+                          <Building2 className="w-3 h-3 mr-1 text-amber-600" />
+                          {getObraName(tx.obra_id)}
+                        </Badge>
+                      </div>
+
+                      <div className="text-right shrink-0">
+                        <span className="text-sm sm:text-base font-extrabold text-slate-900 block">
+                          R${' '}
+                          {Number(tx.amount || 0).toLocaleString('pt-BR', {
+                            minimumFractionDigits: 2,
+                          })}
+                        </span>
+                        <span className="text-[10px] text-slate-400">
+                          {new Date(tx.created || tx.date).toLocaleTimeString('pt-BR', {
+                            hour: '2-digit',
+                            minute: '2-digit',
+                          })}
+                        </span>
+                      </div>
+                    </div>
+
+                    <p className="text-xs text-slate-700 font-medium line-clamp-2 bg-slate-50 p-2 rounded border border-slate-100">
+                      "{tx.description || tx.raw_bot_text || 'Sem texto'}"
+                    </p>
+                  </div>
+
+                  <div className="flex items-center justify-between pt-3 mt-2 border-t border-slate-100">
+                    <div className="flex items-center gap-1">
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() =>
+                          setEditingTx({
+                            id: tx.id,
+                            amount: String(tx.amount || ''),
+                            category: tx.category,
+                            obra_id: tx.obra_id,
+                            description: tx.description,
+                          })
+                        }
+                        className="h-7 px-2 text-xs text-slate-600 hover:text-slate-900"
+                      >
+                        <Edit2 className="w-3.5 h-3.5 mr-1 text-slate-400" />
+                        Ajustar
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => handleDeletePending(tx.id)}
+                        className="h-7 px-2 text-xs text-slate-400 hover:text-red-600"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </Button>
+                    </div>
+
+                    <Button
+                      size="sm"
+                      onClick={() => handleConfirmTransaction(tx)}
+                      disabled={isConfirmingThis}
+                      className="h-7 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs shadow-sm"
+                    >
+                      {isConfirmingThis ? (
+                        <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" />
+                      ) : (
+                        <Check className="w-3.5 h-3.5 mr-1" />
+                      )}
+                      Confirmar
+                    </Button>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Global Stat Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
