@@ -247,7 +247,17 @@ export const botService = {
     const data = await res.json()
 
     if (!data || !data.ok || !Array.isArray(data.result)) {
-      throw new Error(data?.description || 'Falha ao buscar mensagens do Telegram')
+      const errDescription = data?.description || 'Falha ao buscar mensagens do Telegram'
+      if (
+        errDescription.toLowerCase().includes('webhook') ||
+        errDescription.includes('409') ||
+        errDescription.includes('405')
+      ) {
+        throw new Error(
+          `Conflito no Telegram: ${errDescription}. Um webhook ainda está associado ao bot impedindo o getUpdates.`,
+        )
+      }
+      throw new Error(errDescription)
     }
 
     const updates = data.result

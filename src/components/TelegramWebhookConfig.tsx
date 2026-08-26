@@ -179,11 +179,37 @@ export function TelegramWebhookConfig({ obras, onWebhookConfigured }: TelegramWe
         })
       }
     } catch (err: any) {
-      toast({
-        title: 'Erro ao executar polling',
-        description: err.message || 'Falha ao buscar atualizações do Telegram.',
-        variant: 'destructive',
-      })
+      const errMsg = err?.message || 'Falha ao buscar atualizações do Telegram.'
+      const isConflict =
+        errMsg.includes('409') ||
+        errMsg.includes('405') ||
+        errMsg.toLowerCase().includes('webhook') ||
+        errMsg.toLowerCase().includes('conflict')
+
+      if (isConflict) {
+        toast({
+          title: '⚠️ Conflito de Webhook Detectado (HTTP 409/405)',
+          description:
+            'O Telegram não permite getUpdates enquanto houver um webhook registrado. Desative o webhook para destravar o polling.',
+          variant: 'destructive',
+          action: (
+            <Button
+              size="sm"
+              variant="outline"
+              className="bg-white text-rose-700 hover:bg-rose-50 border-rose-200 text-xs font-bold"
+              onClick={handleEnsurePollingClean}
+            >
+              Destravar Bot Agora
+            </Button>
+          ),
+        } as any)
+      } else {
+        toast({
+          title: 'Erro ao executar polling',
+          description: errMsg,
+          variant: 'destructive',
+        })
+      }
     } finally {
       setIsSyncingNow(false)
     }
@@ -192,28 +218,39 @@ export function TelegramWebhookConfig({ obras, onWebhookConfigured }: TelegramWe
   // Delete webhook with drop_pending_updates=true to ensure polling mode works cleanly (prevent 405 error)
   const handleEnsurePollingClean = async () => {
     const cleanToken = botToken.trim()
-    if (!cleanToken) return
+    if (!cleanToken) {
+      toast({
+        title: 'Token não informado',
+        description: 'Digite o token do bot para desativar o webhook.',
+        variant: 'destructive',
+      })
+      return
+    }
 
     setIsCleaningWebhook(true)
     try {
+      // Clear webhook on Telegram with drop_pending_updates=true
       const res = await telegramPolling.clearWebhook(cleanToken)
 
       if (res && res.ok) {
         toast({
           title: '✅ Webhook desativado com sucesso!',
-          description: 'O bot agora está operando 100% em modo Polling Contínuo no frontend.',
+          description:
+            'O conflito com a API do Telegram foi removido. O bot agora pode receber mensagens via Polling sem erros 405/409.',
         })
-        await handleVerifyBot(cleanToken)
+        // Immediately refresh diagnostic and bot status
+        await Promise.all([handleVerifyBot(cleanToken), refreshBackendData()])
       } else {
         toast({
           title: 'Resposta do Telegram',
-          description: res?.description || 'Webhook já estava desativado.',
+          description: res?.description || 'Webhook desativado ou já estava inativo.',
         })
+        await handleVerifyBot(cleanToken)
       }
     } catch (err: any) {
       toast({
         title: 'Erro ao remover webhook',
-        description: err.message,
+        description: err.message || 'Falha na comunicação com o Telegram.',
         variant: 'destructive',
       })
     } finally {
@@ -388,32 +425,46 @@ export function TelegramWebhookConfig({ obras, onWebhookConfigured }: TelegramWe
                 )}
               </div>
 
-              {/* Webhook Warning check (if webhook is still set, offer 1-click delete to prevent 405) */}
-              {webhookInfo?.url && (
-                <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-amber-900 flex items-center justify-between gap-3">
-                  <div className="space-y-0.5">
-                    <span className="font-bold text-xs flex items-center gap-1 text-amber-950">
-                      <AlertCircle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
-                      Webhook ativo detectado ({webhookInfo.url})
-                    </span>
-                    <p className="text-[11px] text-amber-800">
-                      O Telegram não permite <code>getUpdates</code> quando um Webhook está
-                      registrado. Clique para remover e liberar o polling.
+              {/* Webhook Conflict Alert / Recovery Banner (Always visible if webhook exists, pending updates, or error) */}
+              {((webhookInfo?.url && webhookInfo.url !== '') ||
+                (webhookInfo?.pending_update_count && webhookInfo.pending_update_count > 0) ||
+                pollingStatus.lastError?.includes('409') ||
+                pollingStatus.lastError?.includes('405') ||
+                pollingStatus.lastError?.toLowerCase().includes('webhook')) && (
+                <div className="p-3.5 bg-amber-50 border-2 border-amber-300 rounded-xl text-amber-950 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-sm">
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-1.5 font-bold text-xs text-amber-900">
+                      <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
+                      <span>
+                        {webhookInfo?.url
+                          ? `Webhook Ativo Detectado: ${webhookInfo.url}`
+                          : 'Possível Conflito de Webhook ou Mensagens Pendentes'}
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-amber-800 leading-snug">
+                      O Telegram bloqueia o Polling (retorna 405/409) enquanto um webhook estiver
+                      associado ao bot. Remova o webhook para destravar as mensagens.
+                      {webhookInfo?.pending_update_count !== undefined && (
+                        <span className="font-semibold block mt-0.5">
+                          Mensagens pendentes no Telegram:{' '}
+                          <span className="font-mono text-amber-950">
+                            {webhookInfo.pending_update_count}
+                          </span>
+                        </span>
+                      )}
                     </p>
                   </div>
                   <Button
-                    variant="outline"
-                    size="sm"
                     onClick={handleEnsurePollingClean}
                     disabled={isCleaningWebhook}
-                    className="border-amber-300 bg-white hover:bg-amber-100 text-amber-900 text-xs shrink-0 font-bold"
+                    className="bg-amber-600 hover:bg-amber-700 text-white text-xs shrink-0 font-bold shadow-sm"
                   >
                     {isCleaningWebhook ? (
-                      <RefreshCw className="w-3.5 h-3.5 mr-1 animate-spin" />
+                      <RefreshCw className="w-3.5 h-3.5 mr-1.5 animate-spin" />
                     ) : (
-                      <Trash2 className="w-3.5 h-3.5 mr-1 text-amber-700" />
+                      <Trash2 className="w-3.5 h-3.5 mr-1.5" />
                     )}
-                    Desativar Webhook
+                    Destravar Bot (Remover Conflito)
                   </Button>
                 </div>
               )}
@@ -562,6 +613,68 @@ export function TelegramWebhookConfig({ obras, onWebhookConfigured }: TelegramWe
                 <div className="p-2.5 rounded bg-emerald-950/60 border border-emerald-800 text-emerald-300 text-[11px] flex items-center gap-2">
                   <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
                   <span>Backend processando mensagens via onRecordCreate pipeline.</span>
+                </div>
+
+                {/* Conflict / Webhook Status in Diagnostic Card */}
+                {webhookInfo && (
+                  <div className="pt-2 border-t border-slate-800 space-y-2">
+                    <div className="flex justify-between items-center text-[11px]">
+                      <span className="text-slate-400">Webhook no Telegram:</span>
+                      <span
+                        className={`font-mono font-bold ${
+                          webhookInfo.url ? 'text-amber-400' : 'text-emerald-400'
+                        }`}
+                      >
+                        {webhookInfo.url ? 'Ativo (Conflito)' : 'Nenhum (Liberado)'}
+                      </span>
+                    </div>
+
+                    {webhookInfo.pending_update_count !== undefined && (
+                      <div className="flex justify-between items-center text-[11px]">
+                        <span className="text-slate-400">Updates Pendentes Telegram:</span>
+                        <span className="font-mono font-bold text-slate-200">
+                          {webhookInfo.pending_update_count}
+                        </span>
+                      </div>
+                    )}
+
+                    {pollingStatus.lastError && (
+                      <div className="p-2 rounded bg-rose-950/80 border border-rose-800 text-rose-300 text-[10px] space-y-1">
+                        <span className="font-bold flex items-center gap-1">
+                          <AlertCircle className="w-3 h-3 text-rose-400 shrink-0" />
+                          Último erro registrado:
+                        </span>
+                        <p className="font-mono break-all text-[10px] text-rose-200">
+                          {pollingStatus.lastError}
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Highlighted Button in Diagnostics to Remove Conflict / Delete Webhook */}
+                <div className="pt-2 border-t border-slate-800">
+                  <Button
+                    onClick={handleEnsurePollingClean}
+                    disabled={isCleaningWebhook}
+                    className={`w-full text-xs font-bold transition-all shadow-sm ${
+                      webhookInfo?.url ||
+                      (webhookInfo?.pending_update_count && webhookInfo.pending_update_count > 0)
+                        ? 'bg-amber-500 hover:bg-amber-600 text-slate-950 animate-pulse'
+                        : 'bg-slate-800 hover:bg-slate-700 text-amber-300 border border-amber-500/30'
+                    }`}
+                  >
+                    {isCleaningWebhook ? (
+                      <RefreshCw className="w-3.5 h-3.5 mr-1.5 animate-spin" />
+                    ) : (
+                      <Trash2 className="w-3.5 h-3.5 mr-1.5 text-amber-400" />
+                    )}
+                    Destravar Bot (Remover Conflito de Webhook)
+                  </Button>
+                  <p className="text-[10px] text-slate-400 text-center mt-1.5 leading-tight">
+                    Chama a API <code>deleteWebhook</code> do Telegram para limpar bloqueios e
+                    restabelecer o getUpdates.
+                  </p>
                 </div>
               </div>
             </CardContent>
