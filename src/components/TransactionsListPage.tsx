@@ -1,6 +1,7 @@
 import { useState, useMemo } from 'react'
 import { Obra, Transaction, CATEGORY_LABELS, TransactionCategory } from '@/types'
 import { transactionsService } from '@/services/transactions'
+import { googleSheetsService } from '@/services/googleSheets'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -26,6 +27,8 @@ import {
   ArrowDownLeft,
   Calendar,
   Building2,
+  FileSpreadsheet,
+  Loader2,
 } from 'lucide-react'
 
 interface TransactionsListPageProps {
@@ -48,6 +51,36 @@ export function TransactionsListPage({
   const [categoryFilter, setCategoryFilter] = useState<string>('all')
   const [searchQuery, setSearchQuery] = useState('')
   const [selectedReceipt, setSelectedReceipt] = useState<string | null>(null)
+  const [syncingTxId, setSyncingTxId] = useState<string | null>(null)
+
+  const handleSyncToSheets = async (tx: Transaction) => {
+    setSyncingTxId(tx.id)
+    try {
+      const targetObra = obras.find((o) => o.id === tx.obra_id) || obras[0]
+      const res = await googleSheetsService.syncTransactionToSheet(tx, targetObra)
+      if (res.success) {
+        toast({
+          title: '✅ Enviado para a Planilha!',
+          description: res.message,
+        })
+      } else {
+        toast({
+          title: '❌ Falha ao enviar para Google Sheets',
+          description: res.error || res.message,
+          variant: 'destructive',
+        })
+      }
+      onRefresh()
+    } catch (err: any) {
+      toast({
+        title: 'Erro de comunicação',
+        description: err.message,
+        variant: 'destructive',
+      })
+    } finally {
+      setSyncingTxId(null)
+    }
+  }
 
   const filteredTransactions = useMemo(() => {
     return transactions.filter((t) => {
@@ -198,6 +231,7 @@ export function TransactionsListPage({
                   <th className="py-3 px-4">Descrição</th>
                   <th className="py-3 px-4 text-right">Valor</th>
                   <th className="py-3 px-4 text-center">Status</th>
+                  <th className="py-3 px-4 text-center">Google Sheets</th>
                   <th className="py-3 px-4 text-center">Origem</th>
                   <th className="py-3 px-4 text-center">Comprovante</th>
                   <th className="py-3 px-4 text-right">Ações</th>
@@ -206,7 +240,7 @@ export function TransactionsListPage({
               <tbody className="divide-y divide-slate-100">
                 {filteredTransactions.length === 0 ? (
                   <tr>
-                    <td colSpan={10} className="py-10 text-center text-slate-400">
+                    <td colSpan={11} className="py-10 text-center text-slate-400">
                       Nenhum lançamento encontrado.
                     </td>
                   </tr>
@@ -214,6 +248,7 @@ export function TransactionsListPage({
                   filteredTransactions.map((tx) => {
                     const catCfg = CATEGORY_LABELS[tx.category] || CATEGORY_LABELS.other
                     const fileUrl = tx.receipt_file ? transactionsService.getFileUrl(tx) : null
+                    const isSyncing = syncingTxId === tx.id
 
                     return (
                       <tr key={tx.id} className="hover:bg-slate-50 transition">
@@ -273,6 +308,23 @@ export function TransactionsListPage({
                               Confirmado
                             </Badge>
                           )}
+                        </td>
+                        <td className="py-3 px-4 whitespace-nowrap text-center">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => handleSyncToSheets(tx)}
+                            disabled={isSyncing}
+                            className="h-6 px-2 text-[10px] font-medium border-emerald-300 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 hover:text-emerald-800"
+                            title="Enviar / Re-sincronizar esta linha na planilha do Google Sheets"
+                          >
+                            {isSyncing ? (
+                              <Loader2 className="w-3 h-3 animate-spin mr-1 text-emerald-600" />
+                            ) : (
+                              <FileSpreadsheet className="w-3 h-3 mr-1 text-emerald-600" />
+                            )}
+                            Reenviar
+                          </Button>
                         </td>
                         <td className="py-3 px-4 whitespace-nowrap text-center">
                           <Badge

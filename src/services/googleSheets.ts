@@ -51,15 +51,22 @@ export const googleSheetsService = {
     }
 
     const sheetUrl = targetObra?.google_sheets_url || ''
-    const sheetId =
+    let sheetId =
       targetObra?.google_sheets_id ||
       this.extractSpreadsheetId(sheetUrl) ||
-      (targetObra?.name?.toLowerCase().includes('720')
+      (targetObra?.name?.toLowerCase().includes('720') ||
+      transaction.description?.toLowerCase().includes('720h') ||
+      transaction.project?.toLowerCase().includes('720h')
         ? '1jaVk5ZXIR3-Woau6dxFrsmINFpV7WkThVVIZJaZV3BU'
         : null)
 
+    // Fallback if sheetId is still missing
+    if (!sheetId && sheetUrl) {
+      sheetId = this.extractSpreadsheetId(sheetUrl)
+    }
+
     if (!sheetId) {
-      const msg = `Obra "${targetObra?.name || 'Geral'}" não possui link do Google Sheets configurado.`
+      const msg = `Obra "${targetObra?.name || 'Geral'}" não possui ID/link do Google Sheets configurado.`
       console.warn('[GoogleSheetsService]', msg)
       return {
         success: false,

@@ -300,17 +300,18 @@ export function GoogleSheetsPage({ obras, transactions, onRefresh }: GoogleSheet
                       <th className="p-2.5">Descrição</th>
                       <th className="p-2.5 text-right">Valor</th>
                       <th className="p-2.5 text-center">Sheets Synced</th>
+                      <th className="p-2.5 text-center">Ação</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
                     {obraTransactions.length === 0 ? (
                       <tr>
-                        <td colSpan={6} className="p-4 text-center text-slate-400">
+                        <td colSpan={7} className="p-4 text-center text-slate-400">
                           Nenhum lançamento nesta obra.
                         </td>
                       </tr>
                     ) : (
-                      obraTransactions.slice(0, 10).map((t) => (
+                      obraTransactions.map((t) => (
                         <tr key={t.id} className="hover:bg-slate-50">
                           <td className="p-2.5 text-slate-600 whitespace-nowrap">
                             {new Date(t.date).toLocaleDateString('pt-BR')}
@@ -339,6 +340,40 @@ export function GoogleSheetsPage({ obras, transactions, onRefresh }: GoogleSheet
                                 NÃO ⏳
                               </Badge>
                             )}
+                          </td>
+                          <td className="p-2.5 text-center">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={async () => {
+                                try {
+                                  const res = await googleSheetsService.syncTransactionToSheet(
+                                    t,
+                                    selectedObra,
+                                  )
+                                  if (res.success) {
+                                    toast({ title: '✅ Sincronizado!', description: res.message })
+                                  } else {
+                                    toast({
+                                      title: 'Erro ao sincronizar',
+                                      description: res.error || res.message,
+                                      variant: 'destructive',
+                                    })
+                                  }
+                                  onRefresh()
+                                } catch (e: any) {
+                                  toast({
+                                    title: 'Falha',
+                                    description: e.message,
+                                    variant: 'destructive',
+                                  })
+                                }
+                              }}
+                              className="h-6 px-2 text-[10px] font-medium border-emerald-300 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
+                            >
+                              <FileSpreadsheet className="w-3 h-3 mr-1 text-emerald-600" />
+                              Reenviar
+                            </Button>
                           </td>
                         </tr>
                       ))

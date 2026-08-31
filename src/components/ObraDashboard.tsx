@@ -2,6 +2,7 @@ import { useState, useMemo } from 'react'
 import { Obra, Transaction, CATEGORY_LABELS, STATUS_LABELS, TransactionCategory } from '@/types'
 import { transactionsService } from '@/services/transactions'
 import { sheetsService } from '@/services/botAndReports'
+import { googleSheetsService } from '@/services/googleSheets'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -34,6 +35,8 @@ import {
   Copy,
   Calendar,
   Smartphone,
+  RefreshCw,
+  Loader2,
 } from 'lucide-react'
 import { useToast } from '@/hooks/use-toast'
 
@@ -63,6 +66,7 @@ export function ObraDashboard({
   const [typeFilter, setTypeFilter] = useState<string>('all')
   const [searchQuery, setSearchQuery] = useState('')
   const [selectedReceipt, setSelectedReceipt] = useState<string | null>(null)
+  const [syncingTxId, setSyncingTxId] = useState<string | null>(null)
 
   // Financial metrics for this single obra
   const obraStats = useMemo(() => {
@@ -150,6 +154,34 @@ export function ObraDashboard({
       title: 'Planilha exportada!',
       description: 'Download do arquivo CSV iniciado.',
     })
+  }
+
+  const handleSyncToSheets = async (tx: Transaction) => {
+    setSyncingTxId(tx.id)
+    try {
+      const res = await googleSheetsService.syncTransactionToSheet(tx, obra)
+      if (res.success) {
+        toast({
+          title: '✅ Enviado para a Planilha!',
+          description: res.message,
+        })
+      } else {
+        toast({
+          title: '❌ Falha ao enviar para Google Sheets',
+          description: res.error || res.message,
+          variant: 'destructive',
+        })
+      }
+      onTransactionDeleted() // Triggers reload
+    } catch (err: any) {
+      toast({
+        title: 'Erro de comunicação',
+        description: err.message,
+        variant: 'destructive',
+      })
+    } finally {
+      setSyncingTxId(null)
+    }
   }
 
   const statusStyle = STATUS_LABELS[obra.status] || STATUS_LABELS.planejamento
@@ -528,6 +560,7 @@ export function ObraDashboard({
                   <th className="py-3 px-4">Descrição</th>
                   <th className="py-3 px-4 text-right">Valor</th>
                   <th className="py-3 px-4 text-center">Origem</th>
+                  <th className="py-3 px-4 text-center">Planilha</th>
                   <th className="py-3 px-4 text-center">Comprovante</th>
                   {!isPublicView && <th className="py-3 px-4 text-right">Ações</th>}
                 </tr>
@@ -535,7 +568,7 @@ export function ObraDashboard({
               <tbody className="divide-y divide-slate-100">
                 {filteredTransactions.length === 0 ? (
                   <tr>
-                    <td colSpan={8} className="py-8 text-center text-slate-400">
+                    <td colSpan={9} className="py-8 text-center text-slate-400">
                       Nenhum lançamento corresponde aos filtros aplicados.
                     </td>
                   </tr>
@@ -543,6 +576,7 @@ export function ObraDashboard({
                   filteredTransactions.map((tx) => {
                     const catCfg = CATEGORY_LABELS[tx.category] || CATEGORY_LABELS.other
                     const fileUrl = tx.receipt_file ? transactionsService.getFileUrl(tx) : null
+                    const isSyncing = syncingTxId === tx.id
 
                     return (
                       <tr key={tx.id} className="hover:bg-slate-50/80 transition-colors">
@@ -592,6 +626,23 @@ export function ObraDashboard({
                           >
                             {tx.source || 'manual'}
                           </Badge>
+                        </td>
+                        <td className="py-3 px-4 whitespace-nowrap text-center">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => handleSyncToSheets(tx)}
+                            disabled={isSyncing}
+                            className="h-6 px-2 text-[10px] font-medium border-emerald-300 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 hover:text-emerald-800"
+                            title="Enviar / Re-sincronizar esta linha na planilha do Google Sheets"
+                          >
+                            {isSyncing ? (
+                              <Loader2 className="w-3 h-3 animate-spin mr-1 text-emerald-600" />
+                            ) : (
+                              <FileSpreadsheet className="w-3 h-3 mr-1 text-emerald-600" />
+                            )}
+                            Reenviar
+                          </Button>
                         </td>
                         <td className="py-3 px-4 whitespace-nowrap text-center">
                           {fileUrl ? (
