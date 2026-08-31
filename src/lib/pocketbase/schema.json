@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-08-26T02:13:47.459Z",
+  "generatedAt": "2026-08-31T23:12:57.750Z",
   "collections": [
     {
       "name": "users",
@@ -683,7 +683,8 @@
       ],
       "indexes": [
         "CREATE INDEX idx_telegram_msgs_created ON telegram_messages (created DESC)",
-        "CREATE INDEX idx_telegram_msgs_chat ON telegram_messages (chat_id)"
+        "CREATE INDEX idx_telegram_msgs_chat ON telegram_messages (chat_id)",
+        "CREATE UNIQUE INDEX `idx_telegram_messages_update_id_unique` ON `telegram_messages` (update_id) WHERE update_id > 0"
       ]
     },
     {

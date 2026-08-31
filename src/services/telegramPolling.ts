@@ -3,7 +3,7 @@
  *
  * Runs continuous polling in background using Telegram Bot API getUpdates.
  * Persists offset in localStorage to prevent duplicate message handling.
- * Posts new messages to PocketBase telegram_messages collection.
+ * Checks existing update_ids in memory and database before creating records.
  */
 
 import pb from '@/lib/pocketbase/client'
@@ -11,8 +11,6 @@ import pb from '@/lib/pocketbase/client'
 const DEFAULT_BOT_TOKEN = '8855089577:AAGwcjSJzSqZp8u_zPu2DN2V36MY23LhY2Y'
 const STORAGE_OFFSET_KEY = 'telegram_polling_last_offset'
 const STORAGE_TOKEN_KEY = 'telegram_bot_token'
-const POCKETBASE_API_URL =
-  'https://gerenciador-de-dados-e1ffa.goskip.app/api/collections/telegram_messages/records'
 
 export interface TelegramPollingStatus {
   isActive: boolean
@@ -26,6 +24,7 @@ type StatusListener = (status: TelegramPollingStatus) => void
 
 class TelegramPollingService {
   private isRunning = false
+  private isPollingInProgress = false
   private currentOffset = 0
   private sessionReceivedCount = 0
   private lastPolledAt: string | null = null
@@ -33,6 +32,7 @@ class TelegramPollingService {
   private listeners: Set<StatusListener> = new Set()
   private abortController: AbortController | null = null
   private pollingTimeoutId: any = null
+  private processedUpdateIds: Set<number> = new Set()
 
   constructor() {
     // Load offset from localStorage
@@ -41,7 +41,7 @@ class TelegramPollingService {
         const savedOffset = localStorage.getItem(STORAGE_OFFSET_KEY)
         if (savedOffset) {
           const num = parseInt(savedOffset, 10)
-          if (!isNaN(num)) {
+          if (!isNaN(num) && num > 0) {
             this.currentOffset = num
           }
         }
@@ -95,21 +95,44 @@ class TelegramPollingService {
   }
 
   public setOffset(offset: number) {
-    this.currentOffset = offset
-    if (typeof window !== 'undefined') {
-      try {
-        localStorage.setItem(STORAGE_OFFSET_KEY, String(offset))
-      } catch {
-        /* ignore */
+    if (offset > this.currentOffset) {
+      this.currentOffset = offset
+      if (typeof window !== 'undefined') {
+        try {
+          localStorage.setItem(STORAGE_OFFSET_KEY, String(offset))
+        } catch {
+          /* ignore */
+        }
       }
+      this.notifyListeners()
     }
-    this.notifyListeners()
   }
 
-  public start() {
+  /**
+   * Initializes high-water mark offset from DB before first poll
+   */
+  private async initOffsetFromDb() {
+    try {
+      const records = await pb.collection('telegram_messages').getList(1, 1, {
+        sort: '-update_id',
+        filter: 'update_id > 0',
+      })
+      if (records.items.length > 0) {
+        const maxDbUpdateId = Number(records.items[0].update_id) || 0
+        if (maxDbUpdateId >= this.currentOffset) {
+          this.setOffset(maxDbUpdateId + 1)
+        }
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+
+  public async start() {
     if (this.isRunning) return
     this.isRunning = true
     this.lastError = null
+    await this.initOffsetFromDb()
     this.notifyListeners()
     console.log(`[Telegram Polling] Started. Initial offset: ${this.currentOffset}`)
     this.pollLoop()
@@ -117,6 +140,7 @@ class TelegramPollingService {
 
   public stop() {
     this.isRunning = false
+    this.isPollingInProgress = false
     if (this.pollingTimeoutId) {
       clearTimeout(this.pollingTimeoutId)
       this.pollingTimeoutId = null
@@ -133,14 +157,15 @@ class TelegramPollingService {
    * Main polling loop. Continues infinitely while isRunning is true.
    */
   private async pollLoop() {
-    if (!this.isRunning) return
+    if (!this.isRunning || this.isPollingInProgress) return
 
+    this.isPollingInProgress = true
     const token = this.getBotToken()
-    let delayBeforeNext = 2000 // 2 seconds normal delay
+    let delayBeforeNext = 3000 // 3 seconds normal delay
 
     try {
       this.abortController = new AbortController()
-      const url = `https://api.telegram.org/bot${token}/getUpdates?offset=${this.currentOffset}&timeout=10`
+      const url = `https://api.telegram.org/bot${token}/getUpdates?offset=${this.currentOffset}&timeout=5`
 
       const res = await fetch(url, {
         signal: this.abortController.signal,
@@ -160,12 +185,22 @@ class TelegramPollingService {
 
         for (const update of updates) {
           const updateId = Number(update.update_id)
+          if (isNaN(updateId)) continue
+
+          // Deduplication: skip if already processed in this runtime session
+          if (this.processedUpdateIds.has(updateId)) {
+            this.setOffset(updateId + 1)
+            continue
+          }
 
           // Process and send to PocketBase
           await this.processUpdate(update)
 
-          // Advance offset so we don't process this update again
-          if (!isNaN(updateId) && updateId >= this.currentOffset) {
+          // Mark in session set
+          this.processedUpdateIds.add(updateId)
+
+          // Advance offset so we don't request this update again
+          if (updateId >= this.currentOffset) {
             this.setOffset(updateId + 1)
           }
         }
@@ -173,7 +208,7 @@ class TelegramPollingService {
         console.warn('[Telegram Polling] Telegram returned error:', data.description)
         this.lastError = data.description || 'Telegram API returned not OK'
         // If conflict (webhook active), 5s delay
-        delayBeforeNext = 5000
+        delayBeforeNext = 6000
       }
     } catch (err: any) {
       if (err.name === 'AbortError') {
@@ -186,6 +221,7 @@ class TelegramPollingService {
       delayBeforeNext = 5000
     } finally {
       this.abortController = null
+      this.isPollingInProgress = false
       this.notifyListeners()
 
       // Schedule next poll if still running
@@ -198,7 +234,7 @@ class TelegramPollingService {
   }
 
   /**
-   * For each update with a message, send to PocketBase telegram_messages collection
+   * For each update with a message, check database and create record in telegram_messages
    */
   private async processUpdate(update: any) {
     try {
@@ -208,6 +244,22 @@ class TelegramPollingService {
       }
 
       const updateId = Number(update.update_id) || 0
+      if (updateId <= 0) return
+
+      // Deduplication check: query PocketBase before insert
+      try {
+        const existing = await pb.collection('telegram_messages').getList(1, 1, {
+          filter: `update_id = ${updateId}`,
+        })
+        if (existing.totalItems > 0) {
+          console.log(`[Telegram Polling] Update #${updateId} already exists in DB. Skipping.`)
+          this.processedUpdateIds.add(updateId)
+          return
+        }
+      } catch {
+        /* proceed to insert */
+      }
+
       const chatId = msg.chat?.id ? Number(msg.chat.id) : 0
       const messageText = msg.text || ''
       const caption = msg.caption || ''
@@ -230,40 +282,24 @@ class TelegramPollingService {
         caption: caption,
         file_id: fileId,
         file_type: fileType,
-        raw_payload: msg, // Provide message object
+        raw_payload: msg,
         processed: false,
       }
 
-      // 1. Try via pb sdk client or direct fetch POST to PocketBase
-      let success = false
-
-      // Try SDK client first
       try {
         await pb.collection('telegram_messages').create(payload)
-        success = true
-      } catch (pbErr) {
-        // Fallback to direct HTTP POST to PocketBase collection endpoint
-        try {
-          const directRes = await fetch(POCKETBASE_API_URL, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify(payload),
-          })
-          if (directRes.ok) {
-            success = true
-          } else {
-            console.warn('[Telegram Polling] Direct POST failed with status', directRes.status)
-          }
-        } catch (directErr) {
-          console.warn('[Telegram Polling] Direct POST network error', directErr)
-        }
-      }
-
-      if (success) {
         this.sessionReceivedCount++
-        console.log(`[Telegram Polling] Received and saved Telegram message #${updateId}`)
+        this.processedUpdateIds.add(updateId)
+        console.log(`[Telegram Polling] Successfully ingested Telegram update #${updateId}`)
+      } catch (pbErr: any) {
+        // If failed due to unique constraint, it is an expected duplicate ignore
+        if (pbErr?.message?.includes('unique') || pbErr?.status === 400) {
+          console.log(
+            `[Telegram Polling] Duplicate update #${updateId} rejected by DB unique rule.`,
+          )
+        } else {
+          console.warn('[Telegram Polling] Could not save telegram message:', pbErr)
+        }
       }
     } catch (err) {
       console.warn('[Telegram Polling] Error processing message:', err)
@@ -277,7 +313,7 @@ class TelegramPollingService {
     const cleanToken = (token || this.getBotToken()).trim()
     try {
       const res = await fetch(
-        `https://api.telegram.org/bot${cleanToken}/deleteWebhook?drop_pending_updates=true`,
+        `https://api.telegram.org/bot${cleanToken}/deleteWebhook?drop_pending_updates=false`,
         {
           method: 'POST',
         },

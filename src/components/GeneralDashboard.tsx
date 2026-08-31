@@ -167,10 +167,18 @@ export function GeneralDashboard({
         targetObra,
       )
 
-      toast({
-        title: 'Recibo Confirmado!',
-        description: `Lançamento de R$ ${Number(tx.amount || 0).toFixed(2)} aprovado e enviado para a planilha da obra.`,
-      })
+      if (syncResult.success) {
+        toast({
+          title: 'Recibo Confirmado & Sincronizado!',
+          description: `Lançamento de R$ ${Number(tx.amount || 0).toFixed(2)} aprovado e gravado no Google Sheets!`,
+        })
+      } else {
+        toast({
+          title: 'Recibo Confirmado (Pendente no Google Sheets)',
+          description: `Status atualizado para revisado, mas a escrita no Google Sheets retornou aviso: ${syncResult.message}`,
+          variant: 'destructive',
+        })
+      }
 
       if (onRefreshData) onRefreshData()
     } catch (err: any) {
@@ -199,7 +207,7 @@ export function GeneralDashboard({
       })
 
       const targetObra = obras.find((o) => o.id === editingTx.obra_id)
-      await googleSheetsService.syncTransactionToSheet(
+      const syncResult = await googleSheetsService.syncTransactionToSheet(
         {
           id: editingTx.id,
           amount: parsedAmt,
@@ -216,10 +224,18 @@ export function GeneralDashboard({
         targetObra,
       )
 
-      toast({
-        title: 'Recibo Editado e Confirmado!',
-        description: 'Lançamento atualizado com sucesso e sincronizado no Google Sheets.',
-      })
+      if (syncResult.success) {
+        toast({
+          title: 'Recibo Editado e Sincronizado!',
+          description: 'Lançamento atualizado com sucesso e gravado na planilha do Google Sheets.',
+        })
+      } else {
+        toast({
+          title: 'Recibo Editado (Aviso Google Sheets)',
+          description: `Atualizado no banco. Google Sheets: ${syncResult.message}`,
+          variant: 'destructive',
+        })
+      }
       setEditingTx(null)
       if (onRefreshData) onRefreshData()
     } catch (err: any) {
@@ -239,17 +255,38 @@ export function GeneralDashboard({
     setIsSyncingAll(true)
     try {
       let count = 0
+      let syncedCount = 0
+      let lastError = ''
+
       for (const tx of pendingTransactions) {
         const targetObra = obras.find((o) => o.id === tx.obra_id) || obras[0]
         await transactionsService.update(tx.id, { status: 'reviewed' })
-        await googleSheetsService.syncTransactionToSheet({ ...tx, status: 'reviewed' }, targetObra)
+        const res = await googleSheetsService.syncTransactionToSheet(
+          { ...tx, status: 'reviewed' },
+          targetObra,
+        )
         count++
+        if (res.success) {
+          syncedCount++
+        } else {
+          lastError = res.message
+        }
       }
 
-      toast({
-        title: 'Todos os Recibos Confirmados!',
-        description: `${count} lançamento(s) do Telegram foram aprovados e enviados para o Google Sheets.`,
-      })
+      if (syncedCount === count) {
+        toast({
+          title: 'Todos os Recibos Confirmados & Gravados!',
+          description: `${count} lançamento(s) foram aprovados e gravados nas planilhas do Google Sheets.`,
+        })
+      } else {
+        toast({
+          title: `${count} Recibos Confirmados (${syncedCount} gravados no Sheets)`,
+          description: lastError
+            ? `Aviso no Google Sheets: ${lastError}`
+            : 'Algumas planilhas necessitam de permissão de editor.',
+          variant: syncedCount > 0 ? 'default' : 'destructive',
+        })
+      }
       if (onRefreshData) onRefreshData()
     } catch (err: any) {
       toast({
