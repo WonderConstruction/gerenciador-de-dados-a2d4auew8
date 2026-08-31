@@ -36,6 +36,8 @@ export function GoogleSheetsPage({ obras, transactions, onRefresh }: GoogleSheet
   const [sheetUrlInput, setSheetUrlInput] = useState('')
   const [isUpdatingUrl, setIsUpdatingUrl] = useState(false)
   const [isTestingSync, setIsTestingSync] = useState(false)
+  const [isTestingConn, setIsTestingConn] = useState(false)
+  const [connResult, setConnResult] = useState<{ success: boolean; message: string } | null>(null)
 
   const selectedObra = obras.find((o) => o.id === selectedObraId) || obras[0]
   const obraTransactions = transactions.filter((t) => t.obra_id === selectedObra?.id)
@@ -46,6 +48,49 @@ export function GoogleSheetsPage({ obras, transactions, onRefresh }: GoogleSheet
       setSheetUrlInput(selectedObra.google_sheets_url || '')
     }
   }, [selectedObra])
+
+  const handleTestConnection = async () => {
+    if (!sheetUrlInput.trim()) {
+      toast({
+        title: 'Informe a URL ou ID da Planilha',
+        description: 'Insira o link do Google Sheets para testar a comunicação.',
+        variant: 'destructive',
+      })
+      return
+    }
+
+    setIsTestingConn(true)
+    setConnResult(null)
+    try {
+      const res = await googleSheetsService.testConnection(sheetUrlInput)
+      if (res.success && res.metadata) {
+        const sheetsList = res.metadata.sheets.map((s) => s.title).join(', ')
+        const msg = `Planilha "${res.metadata.title}" conectada com sucesso! Abas encontradas: ${sheetsList}`
+        setConnResult({ success: true, message: msg })
+        toast({
+          title: '✅ Conexão Google Sheets Aprovada!',
+          description: msg,
+        })
+      } else {
+        const errorMsg = res.error || 'Não foi possível acessar a planilha.'
+        setConnResult({ success: false, message: errorMsg })
+        toast({
+          title: '❌ Falha de Acesso à Planilha',
+          description: errorMsg,
+          variant: 'destructive',
+        })
+      }
+    } catch (err: any) {
+      setConnResult({ success: false, message: err?.message || 'Erro inesperado' })
+      toast({
+        title: 'Erro ao testar',
+        description: err?.message,
+        variant: 'destructive',
+      })
+    } finally {
+      setIsTestingConn(false)
+    }
+  }
 
   const handleSaveSheetUrl = async () => {
     if (!selectedObra) return
@@ -219,7 +264,32 @@ export function GoogleSheetsPage({ obras, transactions, onRefresh }: GoogleSheet
                       >
                         Salvar Link
                       </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={handleTestConnection}
+                        disabled={isTestingConn}
+                        className="border-slate-300 text-slate-700 bg-white hover:bg-slate-50 shrink-0 font-semibold text-xs"
+                      >
+                        {isTestingConn ? (
+                          <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" />
+                        ) : (
+                          <RefreshCw className="w-3.5 h-3.5 mr-1 text-emerald-600" />
+                        )}
+                        Testar Permissão
+                      </Button>
                     </div>
+                    {connResult && (
+                      <div
+                        className={`p-2.5 rounded text-xs font-medium border ${
+                          connResult.success
+                            ? 'bg-emerald-50 text-emerald-900 border-emerald-200'
+                            : 'bg-red-50 text-red-900 border-red-200'
+                        }`}
+                      >
+                        {connResult.message}
+                      </div>
+                    )}
                   </div>
 
                   <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-200 text-xs">

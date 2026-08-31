@@ -175,8 +175,8 @@ export function ObraDashboard({
       onTransactionDeleted() // Triggers reload
     } catch (err: any) {
       toast({
-        title: 'Erro de comunicação',
-        description: err.message,
+        title: '❌ Falha ao enviar para Google Sheets',
+        description: err.message || 'Erro inesperado na sincronização.',
         variant: 'destructive',
       })
     } finally {

@@ -1,5 +1,3 @@
-import { Obra, Transaction } from '@/types'
-
 // Service Account Credentials provided for Google Sheets API integration
 const SERVICE_ACCOUNT_EMAIL = 'skip-service-account@skip-507216.iam.gserviceaccount.com'
 
@@ -151,22 +149,109 @@ export async function getGoogleAccessToken(): Promise<string> {
   return data.access_token
 }
 
+export interface SpreadsheetMetadata {
+  spreadsheetId: string
+  title: string
+  sheets: { title: string; sheetId: number }[]
+}
+
+/**
+ * Fetches metadata about the spreadsheet to verify accessibility and sheet/tab titles.
+ */
+export async function getSpreadsheetMetadata(spreadsheetId: string): Promise<SpreadsheetMetadata> {
+  const token = await getGoogleAccessToken()
+  const url = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(
+    spreadsheetId,
+  )}?fields=spreadsheetId,properties.title,sheets.properties`
+
+  const res = await fetch(url, {
+    method: 'GET',
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  })
+
+  if (!res.ok) {
+    let errorDetail = ''
+    try {
+      const errJson = await res.json()
+      errorDetail = errJson?.error?.message || JSON.stringify(errJson)
+    } catch {
+      errorDetail = await res.text()
+    }
+
+    if (res.status === 403) {
+      throw new Error(
+        `Permissão negada (HTTP 403): A planilha "${spreadsheetId}" não foi compartilhada com a Conta de Serviço. Compartilhe com "${SERVICE_ACCOUNT_EMAIL}" como Editor. Detalhe: ${errorDetail}`,
+      )
+    }
+
+    if (res.status === 404) {
+      throw new Error(
+        `Planilha não encontrada (HTTP 404): Verifique o ID/link da planilha "${spreadsheetId}". Detalhe: ${errorDetail}`,
+      )
+    }
+
+    throw new Error(`Google Sheets API erro HTTP ${res.status}: ${errorDetail}`)
+  }
+
+  const data = await res.json()
+  const title = data.properties?.title || 'Planilha'
+  const sheets = Array.isArray(data.sheets)
+    ? data.sheets.map((s: any) => ({
+        title: s.properties?.title || 'Sheet1',
+        sheetId: s.properties?.sheetId || 0,
+      }))
+    : []
+
+  return {
+    spreadsheetId,
+    title,
+    sheets,
+  }
+}
+
 /**
  * Appends a row of values to a Google Sheet spreadsheet via Google Sheets API v4.
+ * Uses range 'A1' or sheet-specific range.
  */
 export async function appendRowToGoogleSheet(
   spreadsheetId: string,
   rowValues: (string | number)[],
-  range = 'A1',
-): Promise<{ updatedRange: string; updatedRows: number }> {
+  range?: string,
+): Promise<{ updatedRange: string; updatedRows: number; targetSheetTitle?: string }> {
   const token = await getGoogleAccessToken()
+
+  // If no explicit range provided, try to detect the first sheet title for accurate appending
+  let targetRange = range
+  let targetSheetTitle = ''
+
+  if (!targetRange) {
+    try {
+      const meta = await getSpreadsheetMetadata(spreadsheetId)
+      if (meta.sheets.length > 0) {
+        targetSheetTitle = meta.sheets[0].title
+        // Quote tab name if it has spaces or special characters
+        const safeTitle =
+          targetSheetTitle.includes(' ') || targetSheetTitle.includes("'")
+            ? `'${targetSheetTitle.replace(/'/g, "''")}'`
+            : targetSheetTitle
+        targetRange = `${safeTitle}!A1`
+      } else {
+        targetRange = 'A1'
+      }
+    } catch (e: any) {
+      console.warn('[GoogleAuth] Metadata lookup failed, falling back to A1 range:', e?.message)
+      targetRange = 'A1'
+    }
+  }
 
   const url = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(
     spreadsheetId,
-  )}/values/${encodeURIComponent(range)}:append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS`
+  )}/values/${encodeURIComponent(targetRange)}:append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS`
 
   const body = {
-    range,
+    range: targetRange,
     majorDimension: 'ROWS',
     values: [rowValues],
   }
@@ -208,6 +293,7 @@ export async function appendRowToGoogleSheet(
   return {
     updatedRange: data.updates?.updatedRange || '',
     updatedRows: data.updates?.updatedRows || 1,
+    targetSheetTitle,
   }
 }
 

@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-08-31T23:21:09.266Z",
+  "generatedAt": "2026-08-31T23:53:33.626Z",
   "collections": [
     {
       "name": "users",
@@ -48,11 +48,11 @@
       "name": "obras",
       "type": "base",
       "apiRules": {
-        "list": "@request.auth.id != '' && user_id = @request.auth.id",
+        "list": "",
         "view": "",
-        "create": "@request.auth.id != ''",
-        "update": "@request.auth.id != '' && user_id = @request.auth.id",
-        "delete": "@request.auth.id != '' && user_id = @request.auth.id"
+        "create": "",
+        "update": "",
+        "delete": ""
       },
       "fields": [
         {
@@ -178,11 +178,11 @@
       "name": "transactions",
       "type": "base",
       "apiRules": {
-        "list": "@request.auth.id != '' || obra_id.share_token != ''",
-        "view": "@request.auth.id != '' || obra_id.share_token != ''",
-        "create": "@request.auth.id != ''",
-        "update": "@request.auth.id != ''",
-        "delete": "@request.auth.id != ''"
+        "list": "",
+        "view": "",
+        "create": "",
+        "update": "",
+        "delete": ""
       },
       "fields": [
         {

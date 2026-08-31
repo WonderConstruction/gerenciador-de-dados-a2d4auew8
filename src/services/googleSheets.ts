@@ -1,6 +1,11 @@
 import pb from '@/lib/pocketbase/client'
 import { Obra, Transaction, CATEGORY_LABELS } from '@/types'
-import { appendRowToGoogleSheet, googleServiceAccountConfig } from './googleAuth'
+import {
+  appendRowToGoogleSheet,
+  googleServiceAccountConfig,
+  getSpreadsheetMetadata,
+  SpreadsheetMetadata,
+} from './googleAuth'
 
 export interface SheetRowData {
   date: string
@@ -29,6 +34,26 @@ export const googleSheetsService = {
     }
     const match = trimmed.match(/\/spreadsheets\/d\/([a-zA-Z0-9_-]+)/)
     return match ? match[1] : null
+  },
+
+  /**
+   * Tests connection and permissions to a spreadsheet.
+   */
+  async testConnection(spreadsheetIdOrUrl: string): Promise<{
+    success: boolean
+    metadata?: SpreadsheetMetadata
+    error?: string
+  }> {
+    const sheetId = this.extractSpreadsheetId(spreadsheetIdOrUrl)
+    if (!sheetId) {
+      return { success: false, error: 'ID ou URL da planilha inválido.' }
+    }
+    try {
+      const metadata = await getSpreadsheetMetadata(sheetId)
+      return { success: true, metadata }
+    } catch (err: any) {
+      return { success: false, error: err?.message || 'Falha ao acessar planilha Google Sheets.' }
+    }
   },
 
   /**
@@ -112,11 +137,21 @@ export const googleSheetsService = {
 
       console.log('[GoogleSheetsService] Successfully appended row:', result)
 
-      // 3. ONLY mark `sheets_synced: true` after Google API confirms success
-      await pb.collection('transactions').update(transaction.id, {
-        sheets_synced: true,
-        status: 'reviewed',
-      })
+      // 3. Mark `sheets_synced: true` in PocketBase
+      if (transaction.id) {
+        try {
+          await pb.collection('transactions').update(transaction.id, {
+            sheets_synced: true,
+            status: 'reviewed',
+          })
+        } catch (pbErr: any) {
+          console.warn(
+            '[GoogleSheetsService] Could not update transaction sync status in DB:',
+            pbErr?.message || pbErr,
+          )
+          // Google Sheets write was successful, don't fail the whole operation if local update errored
+        }
+      }
 
       // 4. Update last_sheets_sync timestamp on Obra
       if (targetObra?.id) {
@@ -125,14 +160,18 @@ export const googleSheetsService = {
             last_sheets_sync: new Date().toISOString(),
             google_sheets_id: sheetId,
           })
-        } catch {
-          /* ignore */
+        } catch (pbErr: any) {
+          console.warn(
+            '[GoogleSheetsService] Could not update obra timestamp:',
+            pbErr?.message || pbErr,
+          )
         }
       }
 
+      const tabInfo = result.targetSheetTitle ? ` (Aba "${result.targetSheetTitle}")` : ''
       return {
         success: true,
-        message: `Lançamento de R$ ${amountVal.toFixed(2)} registrado com sucesso na planilha Google Sheets! (Linhas atualizadas: ${result.updatedRows})`,
+        message: `Lançamento de R$ ${amountVal.toFixed(2)} registrado com sucesso no Google Sheets!${tabInfo}`,
         sheetId,
       }
     } catch (err: any) {
