@@ -22,7 +22,21 @@ import {
   FolderSync,
   AlertTriangle,
   Loader2,
+  Eye,
+  CheckCircle,
+  XCircle,
+  FileText,
 } from 'lucide-react'
+
+interface VerifiedSheetData {
+  range: string
+  totalRows: number
+  headerRow?: (string | number)[]
+  recentRows: (string | number)[][]
+  rawValues: (string | number)[][]
+  spreadsheetId: string
+  verifiedAt: Date
+}
 
 interface GoogleSheetsPageProps {
   obras: Obra[]
@@ -38,6 +52,9 @@ export function GoogleSheetsPage({ obras, transactions, onRefresh }: GoogleSheet
   const [isTestingSync, setIsTestingSync] = useState(false)
   const [isTestingConn, setIsTestingConn] = useState(false)
   const [connResult, setConnResult] = useState<{ success: boolean; message: string } | null>(null)
+  const [isVerifyingSheet, setIsVerifyingSheet] = useState(false)
+  const [verifiedData, setVerifiedData] = useState<VerifiedSheetData | null>(null)
+  const [verifyError, setVerifyError] = useState<string | null>(null)
 
   const selectedObra = obras.find((o) => o.id === selectedObraId) || obras[0]
   const obraTransactions = transactions.filter((t) => t.obra_id === selectedObra?.id)
@@ -46,6 +63,9 @@ export function GoogleSheetsPage({ obras, transactions, onRefresh }: GoogleSheet
   useEffect(() => {
     if (selectedObra) {
       setSheetUrlInput(selectedObra.google_sheets_url || '')
+      setVerifiedData(null)
+      setVerifyError(null)
+      setConnResult(null)
     }
   }, [selectedObra])
 
@@ -89,6 +109,60 @@ export function GoogleSheetsPage({ obras, transactions, onRefresh }: GoogleSheet
       })
     } finally {
       setIsTestingConn(false)
+    }
+  }
+
+  const handleVerifySheet = async () => {
+    const sheetTarget =
+      sheetUrlInput.trim() ||
+      selectedObra?.google_sheets_url ||
+      selectedObra?.google_sheets_id ||
+      (selectedObra?.name?.toLowerCase().includes('720')
+        ? '1jaVk5ZXIR3-Woau6dxFrsmINFpV7WkThVVIZJaZV3BU'
+        : '')
+
+    if (!sheetTarget) {
+      toast({
+        title: 'Informe a Planilha',
+        description: 'Insira o link ou ID do Google Sheets para verificar os lançamentos.',
+        variant: 'destructive',
+      })
+      return
+    }
+
+    setIsVerifyingSheet(true)
+    setVerifyError(null)
+
+    try {
+      const res = await googleSheetsService.readRecentRows(sheetTarget, 10)
+      if (res.success && res.data) {
+        setVerifiedData({
+          ...res.data,
+          verifiedAt: new Date(),
+        })
+        toast({
+          title: '✅ Planilha Verificada com Sucesso!',
+          description: `${res.data.totalRows} linha(s) encontrada(s) no intervalo "${res.data.range}".`,
+        })
+      } else {
+        const errorMsg = res.error || 'Não foi possível ler as linhas da planilha.'
+        setVerifyError(errorMsg)
+        toast({
+          title: 'Erro ao verificar planilha',
+          description: errorMsg,
+          variant: 'destructive',
+        })
+      }
+    } catch (err: any) {
+      const errorMsg = err?.message || 'Falha na comunicação com o Google Sheets.'
+      setVerifyError(errorMsg)
+      toast({
+        title: 'Erro ao verificar planilha',
+        description: errorMsg,
+        variant: 'destructive',
+      })
+    } finally {
+      setIsVerifyingSheet(false)
     }
   }
 
@@ -308,17 +382,22 @@ export function GoogleSheetsPage({ obras, transactions, onRefresh }: GoogleSheet
 
               {/* Action Buttons */}
               <div className="flex flex-wrap items-center gap-3 pt-2">
-                {selectedObra?.google_sheets_url && (
-                  <a
-                    href={selectedObra.google_sheets_url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex items-center justify-center px-4 py-2 rounded-md bg-emerald-600 text-white font-semibold text-xs hover:bg-emerald-700 transition"
+                {/* Verify Sheet Button */}
+                {selectedObra && (
+                  <Button
+                    onClick={handleVerifySheet}
+                    disabled={isVerifyingSheet}
+                    className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold shadow-sm"
                   >
-                    <ExternalLink className="w-3.5 h-3.5 mr-1.5" />
-                    Abrir Planilha no Google Drive
-                  </a>
+                    {isVerifyingSheet ? (
+                      <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
+                    ) : (
+                      <Eye className="w-3.5 h-3.5 mr-1.5" />
+                    )}
+                    Verificar Planilha
+                  </Button>
                 )}
+
                 {selectedObra && (
                   <Button
                     onClick={handleSyncReviewedToSheets}
@@ -333,6 +412,19 @@ export function GoogleSheetsPage({ obras, transactions, onRefresh }: GoogleSheet
                     Escrever Lançamentos na Planilha
                   </Button>
                 )}
+
+                {selectedObra?.google_sheets_url && (
+                  <a
+                    href={selectedObra.google_sheets_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center justify-center px-4 py-2 rounded-md border border-slate-300 bg-white text-slate-700 font-semibold text-xs hover:bg-slate-50 transition"
+                  >
+                    <ExternalLink className="w-3.5 h-3.5 mr-1.5 text-emerald-600" />
+                    Abrir no Google Drive
+                  </a>
+                )}
+
                 {selectedObra && (
                   <Button
                     variant="outline"
@@ -347,8 +439,206 @@ export function GoogleSheetsPage({ obras, transactions, onRefresh }: GoogleSheet
             </CardContent>
           </Card>
 
+          {/* Live Sheet Verification Result */}
+          {isVerifyingSheet && (
+            <Card className="bg-emerald-50/50 border-emerald-200 shadow-sm animate-pulse">
+              <CardContent className="p-6 flex items-center justify-center gap-3 text-emerald-800 text-sm font-medium">
+                <Loader2 className="w-5 h-5 animate-spin text-emerald-600" />
+                <span>Lendo dados diretamente da API Google Sheets v4...</span>
+              </CardContent>
+            </Card>
+          )}
+
+          {verifyError && (
+            <Card className="bg-red-50 border-red-200 shadow-sm">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-bold text-red-900 flex items-center gap-2">
+                  <XCircle className="w-4 h-4 text-red-600" />
+                  Erro ao verificar a planilha no Google Sheets
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-2">
+                <p className="text-xs text-red-800 leading-relaxed font-mono whitespace-pre-wrap">
+                  {verifyError}
+                </p>
+                <p className="text-[11px] text-red-700">
+                  Dica: Verifique se a conta de serviço{' '}
+                  <code className="font-mono bg-red-100 px-1 py-0.5 rounded text-[10px]">
+                    {serviceAccountEmail}
+                  </code>{' '}
+                  foi adicionada como Editora ou Leitora no botão "Compartilhar" da planilha no
+                  Google Drive.
+                </p>
+              </CardContent>
+            </Card>
+          )}
+
+          {verifiedData && (
+            <Card className="bg-white border-emerald-300 shadow-md">
+              <CardHeader className="pb-3 bg-emerald-50/60 border-b border-emerald-100">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                  <CardTitle className="text-sm font-bold text-emerald-950 flex items-center gap-2">
+                    <CheckCircle className="w-4 h-4 text-emerald-600" />
+                    Conteúdo Real da Planilha Google Sheets
+                  </CardTitle>
+                  <div className="flex items-center gap-2">
+                    <Badge className="bg-emerald-100 text-emerald-800 border-emerald-300 text-[10px] font-mono">
+                      Intervalo: {verifiedData.range}
+                    </Badge>
+                    <Badge variant="outline" className="text-slate-600 text-[10px]">
+                      Total: {verifiedData.totalRows} linha(s)
+                    </Badge>
+                  </div>
+                </div>
+                <CardDescription className="text-[11px] text-slate-600 flex items-center justify-between">
+                  <span>
+                    Exibindo as <strong>últimas {verifiedData.recentRows.length} linhas</strong>{' '}
+                    lidas via Google Sheets API (Conta de Serviço).
+                  </span>
+                  <span className="text-[10px] text-slate-500">
+                    Verificado às {verifiedData.verifiedAt.toLocaleTimeString('pt-BR')}
+                  </span>
+                </CardDescription>
+              </CardHeader>
+
+              <CardContent className="p-0">
+                {verifiedData.rawValues.length === 0 ? (
+                  <div className="p-6 text-center text-slate-500 text-xs">
+                    A planilha está vazia (nenhuma linha encontrada).
+                  </div>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-xs">
+                      <thead className="bg-slate-100 text-slate-700 uppercase font-bold text-[11px] border-b border-slate-200">
+                        <tr>
+                          <th className="p-2.5 w-10 text-center text-slate-500">#</th>
+                          <th className="p-2.5">Data</th>
+                          <th className="p-2.5">Categoria</th>
+                          <th className="p-2.5">Descrição</th>
+                          <th className="p-2.5 text-right">Valor</th>
+                          <th className="p-2.5 text-center">Recibo / Anexo</th>
+                          {/* If there are extra columns */}
+                          {verifiedData.headerRow &&
+                            verifiedData.headerRow.slice(5).map((h, i) => (
+                              <th key={i} className="p-2.5">
+                                {String(h || `Col ${i + 6}`)}
+                              </th>
+                            ))}
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {verifiedData.recentRows.length === 0 ? (
+                          <tr>
+                            <td colSpan={6} className="p-4 text-center text-slate-400">
+                              Apenas cabeçalho encontrado na planilha.
+                            </td>
+                          </tr>
+                        ) : (
+                          verifiedData.recentRows.map((row, idx) => {
+                            const dateCol = row[0] !== undefined ? String(row[0]) : '—'
+                            const catCol = row[1] !== undefined ? String(row[1]) : '—'
+                            const descCol = row[2] !== undefined ? String(row[2]) : '—'
+                            const valCol = row[3] !== undefined ? String(row[3]) : '—'
+                            const receiptCol = row[4] !== undefined ? String(row[4]) : ''
+
+                            const isReceiptUrl =
+                              typeof receiptCol === 'string' &&
+                              (receiptCol.startsWith('http://') ||
+                                receiptCol.startsWith('https://'))
+
+                            return (
+                              <tr
+                                key={idx}
+                                className={`hover:bg-emerald-50/40 transition-colors ${
+                                  idx === verifiedData.recentRows.length - 1
+                                    ? 'bg-emerald-50/20 font-medium'
+                                    : ''
+                                }`}
+                              >
+                                <td className="p-2.5 text-center text-slate-400 font-mono text-[10px]">
+                                  {verifiedData.totalRows -
+                                    verifiedData.recentRows.length +
+                                    idx +
+                                    1}
+                                </td>
+                                <td className="p-2.5 text-slate-700 font-mono whitespace-nowrap">
+                                  {dateCol}
+                                </td>
+                                <td className="p-2.5 text-slate-800">
+                                  <Badge
+                                    variant="outline"
+                                    className="text-[10px] font-normal bg-slate-50 border-slate-300"
+                                  >
+                                    {catCol}
+                                  </Badge>
+                                </td>
+                                <td className="p-2.5 text-slate-900 max-w-xs font-normal">
+                                  {descCol}
+                                </td>
+                                <td className="p-2.5 text-right font-bold text-slate-900 whitespace-nowrap">
+                                  {valCol.startsWith('R$') || isNaN(Number(valCol))
+                                    ? valCol
+                                    : `R$ ${Number(valCol).toFixed(2)}`}
+                                </td>
+                                <td className="p-2.5 text-center">
+                                  {isReceiptUrl ? (
+                                    <a
+                                      href={receiptCol}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="inline-flex items-center gap-1 text-[11px] text-blue-600 hover:text-blue-800 underline"
+                                    >
+                                      <FileText className="w-3 h-3" />
+                                      Ver Recibo
+                                    </a>
+                                  ) : receiptCol ? (
+                                    <span className="text-[11px] text-slate-500 font-mono truncate max-w-[120px] block mx-auto">
+                                      {receiptCol}
+                                    </span>
+                                  ) : (
+                                    <span className="text-[11px] text-slate-300">—</span>
+                                  )}
+                                </td>
+                                {row.slice(5).map((extraCell, i) => (
+                                  <td key={i} className="p-2.5 text-slate-600">
+                                    {String(extraCell ?? '')}
+                                  </td>
+                                ))}
+                              </tr>
+                            )
+                          })
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+
+                {/* Summary Footer */}
+                <div className="p-3 bg-slate-50 border-t border-slate-200 flex flex-wrap items-center justify-between gap-2 text-xs">
+                  <div className="flex items-center gap-1.5 text-slate-600">
+                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                    <span>Confirmado: Leitura direta realizada via Google Sheets API v4.</span>
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={handleVerifySheet}
+                    disabled={isVerifyingSheet}
+                    className="h-7 text-xs text-emerald-700 hover:text-emerald-900 hover:bg-emerald-100"
+                  >
+                    <RefreshCw
+                      className={`w-3 h-3 mr-1 ${isVerifyingSheet ? 'animate-spin' : ''}`}
+                    />
+                    Atualizar Leitura
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
           {/* Mini Table Preview of the Sheet content */}
           <Card className="bg-white border-slate-200 shadow-sm">
+            {' '}
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-bold text-slate-900 flex items-center gap-2">
                 <Table className="w-4 h-4 text-emerald-600" />

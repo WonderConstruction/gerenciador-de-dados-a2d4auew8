@@ -2,9 +2,11 @@ import pb from '@/lib/pocketbase/client'
 import { Obra, Transaction, CATEGORY_LABELS } from '@/types'
 import {
   appendRowToGoogleSheet,
+  readRowsFromGoogleSheet,
   googleServiceAccountConfig,
   getSpreadsheetMetadata,
   SpreadsheetMetadata,
+  SheetReadResult,
 } from './googleAuth'
 
 export interface SheetRowData {
@@ -53,6 +55,68 @@ export const googleSheetsService = {
       return { success: true, metadata }
     } catch (err: any) {
       return { success: false, error: err?.message || 'Falha ao acessar planilha Google Sheets.' }
+    }
+  },
+
+  /**
+   * Reads raw rows from the Google Sheet and formats recent rows for preview.
+   */
+  async readRecentRows(
+    spreadsheetIdOrUrl: string,
+    limit = 10,
+  ): Promise<{
+    success: boolean
+    data?: {
+      range: string
+      totalRows: number
+      headerRow?: (string | number)[]
+      recentRows: (string | number)[][]
+      rawValues: (string | number)[][]
+      spreadsheetId: string
+    }
+    error?: string
+  }> {
+    const sheetId = this.extractSpreadsheetId(spreadsheetIdOrUrl)
+    if (!sheetId) {
+      return {
+        success: false,
+        error: 'ID ou URL da planilha inválido.',
+      }
+    }
+
+    try {
+      const result: SheetReadResult = await readRowsFromGoogleSheet(sheetId)
+      const allRows = result.values || []
+      const totalRows = allRows.length
+
+      let headerRow: (string | number)[] | undefined
+      let contentRows: (string | number)[][] = allRows
+
+      // If the first row looks like a header (e.g. contains 'Data', 'Categoria', etc.)
+      if (allRows.length > 0) {
+        headerRow = allRows[0]
+        contentRows = allRows.slice(1)
+      }
+
+      // Get the last N rows
+      const recentRows = contentRows.slice(-limit)
+
+      return {
+        success: true,
+        data: {
+          range: result.range,
+          totalRows,
+          headerRow,
+          recentRows,
+          rawValues: allRows,
+          spreadsheetId: sheetId,
+        },
+      }
+    } catch (err: any) {
+      return {
+        success: false,
+        error: err?.message || 'Falha ao ler dados do Google Sheets.',
+      }
     }
   },
 

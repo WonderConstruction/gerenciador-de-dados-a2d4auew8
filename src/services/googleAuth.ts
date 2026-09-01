@@ -155,6 +155,13 @@ export interface SpreadsheetMetadata {
   sheets: { title: string; sheetId: number }[]
 }
 
+export interface SheetReadResult {
+  spreadsheetId: string
+  range: string
+  majorDimension: string
+  values: (string | number)[][]
+}
+
 /**
  * Fetches metadata about the spreadsheet to verify accessibility and sheet/tab titles.
  */
@@ -294,6 +301,79 @@ export async function appendRowToGoogleSheet(
     updatedRange: data.updates?.updatedRange || '',
     updatedRows: data.updates?.updatedRows || 1,
     targetSheetTitle,
+  }
+}
+
+/**
+ * Reads values from a Google Spreadsheet range using spreadsheets.values.get.
+ */
+export async function readRowsFromGoogleSheet(
+  spreadsheetId: string,
+  range?: string,
+): Promise<SheetReadResult> {
+  const token = await getGoogleAccessToken()
+
+  let targetRange = range
+  if (!targetRange) {
+    try {
+      const meta = await getSpreadsheetMetadata(spreadsheetId)
+      if (meta.sheets.length > 0) {
+        const targetSheetTitle = meta.sheets[0].title
+        const safeTitle =
+          targetSheetTitle.includes(' ') || targetSheetTitle.includes("'")
+            ? `'${targetSheetTitle.replace(/'/g, "''")}'`
+            : targetSheetTitle
+        targetRange = `${safeTitle}!A:Z`
+      } else {
+        targetRange = 'A:Z'
+      }
+    } catch (e: any) {
+      console.warn('[GoogleAuth] Metadata lookup failed, falling back to A:Z range:', e?.message)
+      targetRange = 'A:Z'
+    }
+  }
+
+  const url = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(
+    spreadsheetId,
+  )}/values/${encodeURIComponent(targetRange)}?valueRenderOption=FORMATTED_VALUE`
+
+  const res = await fetch(url, {
+    method: 'GET',
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  })
+
+  if (!res.ok) {
+    let errorDetail = ''
+    try {
+      const errJson = await res.json()
+      errorDetail = errJson?.error?.message || JSON.stringify(errJson)
+    } catch {
+      errorDetail = await res.text()
+    }
+
+    if (res.status === 403) {
+      throw new Error(
+        `Permissão negada (HTTP 403) — compartilhe a planilha com "${SERVICE_ACCOUNT_EMAIL}" como Leitor ou Editor. Detalhe: ${errorDetail}`,
+      )
+    }
+
+    if (res.status === 404) {
+      throw new Error(
+        `Planilha não encontrada (HTTP 404) — verifique o ID/link da planilha "${spreadsheetId}". Detalhe: ${errorDetail}`,
+      )
+    }
+
+    throw new Error(`Google Sheets API erro HTTP ${res.status}: ${errorDetail}`)
+  }
+
+  const data = await res.json()
+  return {
+    spreadsheetId,
+    range: data.range || targetRange,
+    majorDimension: data.majorDimension || 'ROWS',
+    values: data.values || [],
   }
 }
 
