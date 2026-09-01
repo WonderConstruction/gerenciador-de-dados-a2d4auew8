@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-09-01T01:20:59.077Z",
+  "generatedAt": "2026-09-01T03:16:05.107Z",
   "collections": [
     {
       "name": "users",
@@ -732,6 +732,58 @@
         }
       ],
       "indexes": ["CREATE UNIQUE INDEX idx_telegram_state_key ON telegram_state (key)"]
+    },
+    {
+      "name": "cron_test_logs",
+      "type": "base",
+      "apiRules": {
+        "list": "",
+        "view": "",
+        "create": "",
+        "update": "",
+        "delete": ""
+      },
+      "fields": [
+        {
+          "name": "timestamp",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "message",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "tick_count",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "job_name",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "created",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate"]
+        },
+        {
+          "name": "updated",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate", "onUpdate"]
+        }
+      ],
+      "indexes": ["CREATE INDEX idx_cron_test_logs_created ON cron_test_logs (created DESC)"]
     }
   ]
 }
