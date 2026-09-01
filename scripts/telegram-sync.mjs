@@ -10,7 +10,7 @@ import PocketBase from 'pocketbase'
  */
 
 const DEFAULT_BOT_TOKEN = '8855089577:AAGwcjSJzSqZp8u_zPu2DN2V36MY23LhY2Y'
-const DEFAULT_PB_URL = 'https://gerenciador-de-dados-965a3b9d.usecurling.com'
+const DEFAULT_PB_URL = 'https://gerenciador-de-dados-e1ffa.goskip.app'
 
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || DEFAULT_BOT_TOKEN
 const POCKETBASE_URL =

@@ -1,33 +1,35 @@
-name: Telegram 24/7 Background Sync
+name: Telegram 24/7 Background Poller
 
 on:
   schedule:
+    # Run every 5 minutes (GitHub Actions cron minimum interval)
     - cron: '*/5 * * * *'
-  workflow_dispatch:
+  workflow_dispatch: # Allows manual trigger from GitHub Actions UI
+
+concurrency:
+  group: telegram-poller-sync
+  cancel-in-progress: false
 
 jobs:
-  sync:
-    name: Sync Telegram Messages
+  poll-telegram:
+    name: Poll Telegram Updates & Sync PocketBase
     runs-on: ubuntu-latest
     timeout-minutes: 5
 
     steps:
-      - name: Checkout repository
+      - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
+      - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
-          cache: 'npm'
+          node-version: '20'
 
       - name: Install dependencies
         run: npm ci --prefer-offline --no-audit
 
-      - name: Run Telegram Sync Poller
+      - name: Run Telegram Polling Sync
         env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          PB_AUTH_EMAIL: ${{ secrets.PB_AUTH_EMAIL }}
-          PB_AUTH_PASSWORD: ${{ secrets.PB_AUTH_PASSWORD }}
-          POCKETBASE_URL: ${{ secrets.POCKETBASE_URL }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN || '8855089577:AAGwcjSJzSqZp8u_zPu2DN2V36MY23LhY2Y' }}
+          POCKETBASE_URL: ${{ secrets.POCKETBASE_URL || 'https://gerenciador-de-dados-e1ffa.goskip.app' }}
         run: node scripts/telegram-sync.mjs
