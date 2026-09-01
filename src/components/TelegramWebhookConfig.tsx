@@ -270,17 +270,24 @@ export function TelegramWebhookConfig({ obras, onWebhookConfigured }: TelegramWe
       {/* Hero card / Polling System Overview */}
       <div className="bg-gradient-to-r from-sky-950 via-slate-900 to-indigo-950 text-white p-6 rounded-2xl border border-sky-800/60 shadow-md flex flex-col md:flex-row md:items-center justify-between gap-6">
         <div className="space-y-2 max-w-2xl">
-          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-400/30 text-xs font-semibold">
-            <Radio className="w-3.5 h-3.5 animate-pulse" />
-            <span>Sistema de Polling Automático Ativo</span>
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-400/30 text-xs font-semibold">
+              <Radio className="w-3.5 h-3.5 animate-pulse" />
+              <span>Polling Ativo no Navegador</span>
+            </div>
+            <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-400/30 text-xs font-semibold">
+              <Sparkles className="w-3.5 h-3.5 text-indigo-300" />
+              <span>GitHub Actions 24h Configurado</span>
+            </div>
           </div>
           <h2 className="text-2xl font-black tracking-tight text-white flex items-center gap-2">
-            Telegram Bot Polling (Contínuo)
+            Telegram Bot 24/7 (Background + Navegador)
           </h2>
           <p className="text-sm text-sky-100/80 leading-relaxed">
-            O backend verifica novas fotos, recibos e mensagens enviadas ao seu bot a cada 10
-            segundos via <strong>Telegram getUpdates</strong>, parseia valores com Inteligência
-            Artificial e gera os lançamentos financeiros automaticamente.
+            Receba notas fiscais, fotos e descrições no Telegram 24h por dia sem manter a aba
+            aberta. O workflow do <strong>GitHub Actions</strong> roda em nuvem a cada 5 minutos
+            (100% gratuito) e o polling instantâneo no navegador opera em tempo real quando você
+            estiver com o painel aberto.
           </p>
         </div>
 
@@ -288,39 +295,27 @@ export function TelegramWebhookConfig({ obras, onWebhookConfigured }: TelegramWe
         <div className="p-4 rounded-xl bg-slate-950/80 border border-sky-800/40 shrink-0 space-y-3 min-w-[220px]">
           <div className="flex items-center justify-between">
             <span className="text-[11px] font-semibold uppercase text-sky-400 block tracking-wider">
-              Status do Polling
+              Status Operacional
             </span>
-            {pollingStatus.isActive ? (
-              <span className="flex h-2.5 w-2.5 relative">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
-              </span>
-            ) : (
-              <span className="h-2.5 w-2.5 rounded-full bg-rose-500 inline-block"></span>
-            )}
+            <span className="flex h-2.5 w-2.5 relative">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
+            </span>
           </div>
 
           <div className="space-y-1">
             <div className="flex items-center gap-2">
-              <span
-                className={`font-bold text-sm ${pollingStatus.isActive ? 'text-emerald-400' : 'text-rose-400'}`}
-              >
-                {pollingStatus.isActive ? 'Polling ativo' : 'Polling inativo'}
-              </span>
+              <span className="font-bold text-sm text-emerald-400">Pronto para Ingestão</span>
               <Badge
                 variant="outline"
-                className={`text-[10px] ${
-                  pollingStatus.isActive
-                    ? 'bg-emerald-950 text-emerald-300 border-emerald-600'
-                    : 'bg-rose-950 text-rose-300 border-rose-600'
-                }`}
+                className="text-[10px] bg-emerald-950 text-emerald-300 border-emerald-600"
               >
-                {pollingStatus.isActive ? '2s auto' : 'Parado'}
+                24h + Realtime
               </Badge>
             </div>
             <p className="text-[11px] text-slate-300 flex items-center gap-1 font-mono">
               <Clock className="w-3 h-3 text-slate-400" />
-              Offset: {pollingStatus.offset} | Sessão: {pollingStatus.sessionReceivedCount}
+              Offset: {lastUpdateId > 0 ? `#${lastUpdateId}` : pollingStatus.offset}
             </p>
           </div>
 
@@ -679,12 +674,63 @@ export function TelegramWebhookConfig({ obras, onWebhookConfigured }: TelegramWe
               </div>
             </CardContent>
           </Card>
+          {/* GitHub Actions 24/7 Setup Guide Card */}
+          <Card className="bg-gradient-to-br from-indigo-50 via-slate-50 to-sky-50 border-indigo-200 shadow-sm">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-xs font-bold text-indigo-950 uppercase flex items-center gap-1.5">
+                <Sparkles className="w-4 h-4 text-indigo-600" />
+                Ativação GitHub Actions (24h Sem Custo)
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3 text-xs text-indigo-950 leading-relaxed">
+              <p className="text-[11px] text-slate-700">
+                O workflow{' '}
+                <code className="px-1.5 py-0.5 rounded bg-indigo-100 font-mono text-[10px] text-indigo-900">
+                  .github/workflows/telegram-sync.yml
+                </code>{' '}
+                já está criado no projeto para rodar a cada 5 minutos.
+              </p>
 
+              <div className="p-2.5 bg-white/80 rounded-lg border border-indigo-200/80 space-y-1.5">
+                <span className="font-bold text-[11px] text-indigo-900 block">
+                  Passos para rodar no GitHub:
+                </span>
+                <ol className="list-decimal pl-4 space-y-1 text-[11px] text-slate-700">
+                  <li>
+                    Conecte seu repositório ao <strong>GitHub</strong> no painel de configurações do
+                    projeto.
+                  </li>
+                  <li>
+                    No repositório do GitHub, acesse{' '}
+                    <strong>Settings &gt; Secrets and variables &gt; Actions</strong>.
+                  </li>
+                  <li>
+                    (Opcional) Cadastre as variáveis/secrets se quiser sobrescrever os padrões:
+                    <ul className="list-disc pl-3 mt-1 space-y-0.5 font-mono text-[10px] text-slate-600">
+                      <li>
+                        <code>TELEGRAM_BOT_TOKEN</code>
+                      </li>
+                      <li>
+                        <code>POCKETBASE_URL</code> (já aponta para a URL pública)
+                      </li>
+                      <li>
+                        <code>PB_AUTH_EMAIL</code> &amp; <code>PB_AUTH_PASSWORD</code>
+                      </li>
+                    </ul>
+                  </li>
+                  <li>
+                    Na aba <strong>Actions</strong> do GitHub, o workflow{' '}
+                    <em>Telegram 24/7 Background Poller</em> rodará automaticamente a cada 5 min!
+                  </li>
+                </ol>
+              </div>
+            </CardContent>
+          </Card>
           {/* Test real guide */}
           <Card className="bg-gradient-to-br from-amber-50 to-orange-50 border-amber-200 shadow-sm">
             <CardHeader className="pb-2">
               <CardTitle className="text-xs font-bold text-amber-950 uppercase flex items-center gap-1.5">
-                <Sparkles className="w-4 h-4 text-amber-600" />
+                <Bot className="w-4 h-4 text-amber-600" />
                 Como Enviar Lançamentos pelo Telegram
               </CardTitle>
             </CardHeader>
@@ -715,7 +761,7 @@ export function TelegramWebhookConfig({ obras, onWebhookConfigured }: TelegramWe
                 </li>
               </ol>
             </CardContent>
-          </Card>
+          </Card>{' '}
         </div>
       </div>
     </div>
