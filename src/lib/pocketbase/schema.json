@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-09-02T14:24:49.176Z",
+  "generatedAt": "2026-09-02T14:45:10.363Z",
   "collections": [
     {
       "name": "users",
@@ -323,11 +323,11 @@
       "name": "bot_messages",
       "type": "base",
       "apiRules": {
-        "list": "@request.auth.id != ''",
-        "view": "@request.auth.id != ''",
+        "list": "",
+        "view": "",
         "create": "",
-        "update": "@request.auth.id != ''",
-        "delete": "@request.auth.id != ''"
+        "update": "",
+        "delete": ""
       },
       "fields": [
         {
@@ -614,8 +614,8 @@
         "list": "",
         "view": "",
         "create": "",
-        "update": "@request.auth.id != ''",
-        "delete": "@request.auth.id != ''"
+        "update": "",
+        "delete": ""
       },
       "fields": [
         {
@@ -695,7 +695,7 @@
         "view": "",
         "create": "",
         "update": "",
-        "delete": "@request.auth.id != ''"
+        "delete": ""
       },
       "fields": [
         {

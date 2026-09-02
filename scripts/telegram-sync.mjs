@@ -12,21 +12,72 @@ import PocketBase from 'pocketbase'
 const DEFAULT_BOT_TOKEN = '8855089577:AAGwcjSJzSqZp8u_zPu2DN2V36MY23LhY2Y'
 const DEFAULT_PB_URL = 'https://gerenciador-de-dados-e1ffa.goskip.app'
 
-const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || DEFAULT_BOT_TOKEN
-const POCKETBASE_URL =
-  process.env.POCKETBASE_URL || process.env.VITE_POCKETBASE_URL || DEFAULT_PB_URL
-const PB_AUTH_EMAIL = process.env.PB_AUTH_EMAIL
-const PB_AUTH_PASSWORD = process.env.PB_AUTH_PASSWORD
+// Sanitize inputs
+const rawToken = process.env.TELEGRAM_BOT_TOKEN || DEFAULT_BOT_TOKEN
+const TELEGRAM_BOT_TOKEN = rawToken ? rawToken.trim() : ''
 
-console.log('--- Telegram Sync 24/7 Polling Script ---')
-console.log(`PocketBase URL: ${POCKETBASE_URL}`)
+let rawPbUrl = process.env.POCKETBASE_URL || process.env.VITE_POCKETBASE_URL || DEFAULT_PB_URL
+if (rawPbUrl) {
+  rawPbUrl = rawPbUrl.trim()
+  if (rawPbUrl.endsWith('/')) {
+    rawPbUrl = rawPbUrl.slice(0, -1)
+  }
+}
+const POCKETBASE_URL = rawPbUrl
+
+const PB_AUTH_EMAIL = process.env.PB_AUTH_EMAIL ? process.env.PB_AUTH_EMAIL.trim() : ''
+const PB_AUTH_PASSWORD = process.env.PB_AUTH_PASSWORD ? process.env.PB_AUTH_PASSWORD.trim() : ''
+
+console.log('====================================================')
+console.log('🚀 Telegram Sync 24/7 Polling Script')
+console.log('====================================================')
+console.log(`[Config] PocketBase URL: ${POCKETBASE_URL}`)
 console.log(
-  `Bot Token configured: ${TELEGRAM_BOT_TOKEN ? 'YES (Length: ' + TELEGRAM_BOT_TOKEN.length + ')' : 'NO'}`,
+  `[Config] Telegram Bot Token: ${
+    TELEGRAM_BOT_TOKEN ? 'CONFIGURED (' + TELEGRAM_BOT_TOKEN.slice(0, 8) + '...)' : 'MISSING'
+  }`,
 )
+console.log(
+  `[Config] PB Auth Email: ${PB_AUTH_EMAIL ? PB_AUTH_EMAIL : '(None provided - using public API rules)'}`,
+)
+console.log(
+  `[Config] PB Auth Password: ${PB_AUTH_PASSWORD ? 'CONFIGURED (***)' : '(None provided)'}`,
+)
+console.log('====================================================')
 
 if (!TELEGRAM_BOT_TOKEN) {
-  console.error('[Error] TELEGRAM_BOT_TOKEN is missing.')
+  console.error('❌ [Error] TELEGRAM_BOT_TOKEN is missing. Exiting.')
   process.exit(1)
+}
+
+function formatPbError(err) {
+  if (!err) return 'Unknown error'
+  const status = err.status || err.response?.status || err.statusCode || ''
+  const url = err.url || err.response?.url || ''
+  let message = err.message || String(err)
+  let details = ''
+
+  if (err.data) {
+    try {
+      details = JSON.stringify(err.data, null, 2)
+    } catch (_) {
+      details = String(err.data)
+    }
+  } else if (err.response?.data) {
+    try {
+      details = JSON.stringify(err.response.data, null, 2)
+    } catch (_) {
+      details = String(err.response.data)
+    }
+  }
+
+  const parts = []
+  if (status) parts.push(`HTTP ${status}`)
+  if (url) parts.push(`URL: ${url}`)
+  if (message) parts.push(`Message: ${message}`)
+  if (details && details !== '{}') parts.push(`Details: ${details}`)
+
+  return parts.length > 0 ? parts.join(' | ') : message
 }
 
 const pb = new PocketBase(POCKETBASE_URL)
@@ -35,28 +86,23 @@ pb.autoCancellation(false)
 async function authenticate() {
   if (PB_AUTH_EMAIL && PB_AUTH_PASSWORD) {
     try {
-      console.log(
-        `[Auth] Attempting PocketBase authentication with collection 'users' as ${PB_AUTH_EMAIL}...`,
-      )
+      console.log(`🔑 [Auth] Attempting PocketBase authentication as '${PB_AUTH_EMAIL}'...`)
       const authData = await pb
         .collection('users')
         .authWithPassword(PB_AUTH_EMAIL, PB_AUTH_PASSWORD)
       console.log(
-        `[Auth] Authenticated successfully! User ID: ${authData?.record?.id || pb.authStore?.record?.id || 'OK'}`,
+        `✅ [Auth] Authenticated successfully! User ID: ${authData?.record?.id || pb.authStore?.record?.id || 'OK'}`,
       )
     } catch (err) {
-      const status = err?.status || err?.response?.status || 'unknown'
-      const detail = err?.data ? JSON.stringify(err.data) : err?.message || String(err)
-      console.error(
-        `[Auth Error] User authentication failed for ${PB_AUTH_EMAIL} (HTTP ${status}): ${detail}`,
-      )
+      console.error(`⚠️ [Auth Error] Authentication failed for ${PB_AUTH_EMAIL}:`)
+      console.error(`   ${formatPbError(err)}`)
       console.warn(
-        '[Auth Warning] Please check if PB_AUTH_EMAIL and PB_AUTH_PASSWORD GitHub Secrets match a valid user in PocketBase collection "users". Continuing with current session/public access rules...',
+        '⚠️ [Auth Warning] Continuing with anonymous/public access rules (the collections allow public read/write).',
       )
     }
   } else {
     console.log(
-      '[Auth] No PB_AUTH_EMAIL or PB_AUTH_PASSWORD secret provided in environment. Proceeding using public collection access rules.',
+      'ℹ️ [Auth] No PB_AUTH_EMAIL or PB_AUTH_PASSWORD secret provided. Proceeding with public collection access rules.',
     )
   }
 }
@@ -69,13 +115,15 @@ async function getLastUpdateId() {
     const records = await pb.collection('telegram_state').getList(1, 1, {
       filter: 'key = "last_update_id"',
     })
-    if (records.items.length > 0) {
+    if (records.items && records.items.length > 0) {
       stateRecord = records.items[0]
       lastUpdateId = Number(stateRecord.value) || 0
-      console.log(`[State] Found last_update_id from telegram_state: ${lastUpdateId}`)
+      console.log(`📌 [State] Found last_update_id from telegram_state: ${lastUpdateId}`)
+    } else {
+      console.log('📌 [State] No existing telegram_state record for last_update_id.')
     }
   } catch (err) {
-    console.warn('[State] Could not fetch telegram_state:', err?.message || err)
+    console.warn(`⚠️ [State] Could not fetch telegram_state: ${formatPbError(err)}`)
   }
 
   // Fallback: check max update_id from telegram_messages
@@ -85,17 +133,16 @@ async function getLastUpdateId() {
         filter: 'update_id > 0',
         sort: '-update_id',
       })
-      if (msgs.items.length > 0) {
+      if (msgs.items && msgs.items.length > 0) {
         const maxDbId = Number(msgs.items[0].update_id) || 0
         if (maxDbId > lastUpdateId) {
           lastUpdateId = maxDbId
-          console.log(`[State] Discovered max update_id from telegram_messages: ${lastUpdateId}`)
+          console.log(`📌 [State] Discovered max update_id from telegram_messages: ${lastUpdateId}`)
         }
       }
     } catch (err) {
       console.warn(
-        '[State] Could not check telegram_messages for max update_id:',
-        err?.message || err,
+        `⚠️ [State] Could not check telegram_messages for max update_id: ${formatPbError(err)}`,
       )
     }
   }
@@ -128,14 +175,9 @@ async function updateState(stateRecord, newLastUpdateId) {
         value: newLastUpdateId,
       })
     }
-    console.log(`[State] Successfully updated last_update_id to ${newLastUpdateId}`)
+    console.log(`💾 [State] Successfully updated last_update_id to ${newLastUpdateId}`)
   } catch (err) {
-    const status = err?.status || err?.response?.status || ''
-    const detail = err?.data ? JSON.stringify(err.data) : err?.message || String(err)
-    console.error(
-      `[State Error] Failed to persist last_update_id ${status ? '(HTTP ' + status + ')' : ''}:`,
-      detail,
-    )
+    console.error(`⚠️ [State Error] Failed to persist last_update_id: ${formatPbError(err)}`)
   }
 }
 
@@ -157,7 +199,7 @@ async function updateLastPollTime() {
       text_value: nowIso,
     })
   } catch (err) {
-    console.warn('[State] Could not record last_poll_at:', err?.message || err)
+    console.warn(`⚠️ [State] Could not record last_poll_at: ${formatPbError(err)}`)
   }
 }
 
@@ -168,29 +210,38 @@ async function run() {
     const { lastUpdateId, stateRecord } = await getLastUpdateId()
     const offset = lastUpdateId > 0 ? lastUpdateId + 1 : 0
 
-    console.log(`[Telegram API] Requesting getUpdates (offset: ${offset})...`)
+    console.log(`📥 [Telegram API] Requesting getUpdates with offset ${offset}...`)
     const telegramUrl = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getUpdates?offset=${offset}&timeout=10&limit=50`
 
-    const response = await fetch(telegramUrl)
+    let response
+    try {
+      const controller = new AbortController()
+      const timeoutId = setTimeout(() => controller.abort(), 25000)
+      response = await fetch(telegramUrl, { signal: controller.signal })
+      clearTimeout(timeoutId)
+    } catch (networkErr) {
+      throw new Error(`Telegram network request failed: ${networkErr.message || networkErr}`)
+    }
+
     if (!response.ok) {
       const errorText = await response.text()
       throw new Error(
-        `Telegram API responded HTTP ${response.status} ${response.statusText}: ${errorText}`,
+        `Telegram API returned HTTP ${response.status} ${response.statusText}: ${errorText}`,
       )
     }
 
     const data = await response.json()
     if (!data || !data.ok || !Array.isArray(data.result)) {
-      throw new Error(`Invalid Telegram response: ${JSON.stringify(data)}`)
+      throw new Error(`Invalid Telegram API response body: ${JSON.stringify(data)}`)
     }
 
     const updates = data.result
-    console.log(`[Telegram API] Received ${updates.length} updates.`)
+    console.log(`📦 [Telegram API] Received ${updates.length} updates.`)
 
     await updateLastPollTime()
 
     if (updates.length === 0) {
-      console.log('[Telegram Sync] No new messages to process. Everything up to date.')
+      console.log('✨ [Telegram Sync] No new messages to process. All up to date!')
       return
     }
 
@@ -224,7 +275,7 @@ async function run() {
       } catch (_) {}
 
       if (alreadyExists) {
-        console.log(`[Telegram Sync] Update #${updateId} already exists in DB. Skipping.`)
+        console.log(`⏩ [Telegram Sync] Update #${updateId} already exists in DB. Skipping.`)
         skippedCount++
         continue
       }
@@ -259,18 +310,18 @@ async function run() {
         await pb.collection('telegram_messages').create(payload)
         createdCount++
         console.log(
-          `[Telegram Sync] Inserted telegram_messages record for update #${updateId} (chat: ${chatId})`,
+          `➕ [Telegram Sync] Inserted telegram_messages record for update #${updateId} (chat: ${chatId})`,
         )
       } catch (err) {
-        if (err?.message?.includes('unique') || err?.status === 400) {
-          console.log(`[Telegram Sync] Update #${updateId} ignored due to unique rule.`)
+        const msgStr = err?.message || ''
+        if (msgStr.includes('unique') || err?.status === 400) {
+          console.log(
+            `⏩ [Telegram Sync] Update #${updateId} ignored due to uniqueness or validation: ${msgStr}`,
+          )
           skippedCount++
         } else {
-          const status = err?.status || err?.response?.status || ''
-          const detail = err?.data ? JSON.stringify(err.data) : err?.message || String(err)
           console.error(
-            `[Telegram Sync Error] Error inserting update #${updateId} ${status ? '(HTTP ' + status + ')' : ''}:`,
-            detail,
+            `⚠️ [Telegram Sync Error] Error inserting update #${updateId}: ${formatPbError(err)}`,
           )
         }
       }
@@ -280,20 +331,16 @@ async function run() {
       await updateState(stateRecord, maxUpdateId)
     }
 
+    console.log('====================================================')
     console.log(
-      `[Telegram Sync Summary] Processed: ${updates.length} total, ${createdCount} created, ${skippedCount} skipped. New offset: ${maxUpdateId + 1}`,
+      `🎉 [Telegram Sync Summary] Processed: ${updates.length} total, ${createdCount} created, ${skippedCount} skipped. Offset: ${maxUpdateId + 1}`,
     )
+    console.log('====================================================')
   } catch (error) {
-    const errorDetails = error?.data
-      ? JSON.stringify(error.data, null, 2)
-      : error?.stack || error?.message || String(error)
-    console.error('[Telegram Sync Error] Fatal error during sync execution:')
-    console.error(errorDetails)
-    if (error?.url) {
-      console.error(`[Telegram Sync Error] Failed Request URL: ${error.url}`)
-    }
-    if (error?.status) {
-      console.error(`[Telegram Sync Error] HTTP Status: ${error.status}`)
+    console.error('💥 [Telegram Sync Fatal Error] Poller failed with error:')
+    console.error(`   ${formatPbError(error)}`)
+    if (error.stack) {
+      console.error(error.stack)
     }
     process.exit(1)
   }
