@@ -59,13 +59,16 @@ function formatPbError(err) {
 
   if (err.data) {
     try {
-      details = JSON.stringify(err.data, null, 2)
+      details = typeof err.data === 'string' ? err.data : JSON.stringify(err.data, null, 2)
     } catch (_) {
       details = String(err.data)
     }
   } else if (err.response?.data) {
     try {
-      details = JSON.stringify(err.response.data, null, 2)
+      details =
+        typeof err.response.data === 'string'
+          ? err.response.data
+          : JSON.stringify(err.response.data, null, 2)
     } catch (_) {
       details = String(err.response.data)
     }
@@ -93,17 +96,33 @@ async function authenticate() {
       console.log(
         `✅ [Auth] Authenticated successfully! User ID: ${authData?.record?.id || pb.authStore?.record?.id || 'OK'}`,
       )
+      return true
     } catch (err) {
       console.error(`⚠️ [Auth Error] Authentication failed for ${PB_AUTH_EMAIL}:`)
       console.error(`   ${formatPbError(err)}`)
+      // If auth failed, clear the invalid token from authStore so subsequent calls don't send a rejected Bearer token
+      pb.authStore.clear()
       console.warn(
-        '⚠️ [Auth Warning] Continuing with anonymous/public access rules (the collections allow public read/write).',
+        '⚠️ [Auth Warning] Cleared invalid auth token. Falling back to public access rules (collections allow public read/write).',
       )
+      return false
     }
   } else {
     console.log(
-      'ℹ️ [Auth] No PB_AUTH_EMAIL or PB_AUTH_PASSWORD secret provided. Proceeding with public collection access rules.',
+      'ℹ️ [Auth] No PB_AUTH_EMAIL / PB_AUTH_PASSWORD secret provided or incomplete. Proceeding with public collection access rules.',
     )
+    return false
+  }
+}
+
+async function verifyPocketBaseConnectivity() {
+  try {
+    console.log(`📡 [Healthcheck] Testing PocketBase connection at ${POCKETBASE_URL}...`)
+    const health = await pb.health.check()
+    console.log(`✅ [Healthcheck] PocketBase is reachable (code: ${health.code || 200})`)
+  } catch (err) {
+    console.warn(`⚠️ [Healthcheck Warning] Health check returned: ${formatPbError(err)}`)
+    console.warn('   Will attempt collection operations directly...')
   }
 }
 
@@ -205,6 +224,7 @@ async function updateLastPollTime() {
 
 async function run() {
   try {
+    await verifyPocketBaseConnectivity()
     await authenticate()
 
     const { lastUpdateId, stateRecord } = await getLastUpdateId()
@@ -225,6 +245,12 @@ async function run() {
 
     if (!response.ok) {
       const errorText = await response.text()
+      // If 409 Conflict, explain why and recommend deleting webhook
+      if (response.status === 409) {
+        throw new Error(
+          `Telegram API HTTP 409 Conflict: A webhook is currently set for this bot. Please clear/delete the webhook in the Telegram tab or via deleteWebhook API so polling can receive updates. Details: ${errorText}`,
+        )
+      }
       throw new Error(
         `Telegram API returned HTTP ${response.status} ${response.statusText}: ${errorText}`,
       )
@@ -272,7 +298,11 @@ async function run() {
         if (existing.totalItems > 0) {
           alreadyExists = true
         }
-      } catch (_) {}
+      } catch (checkErr) {
+        console.warn(
+          `[Telegram Sync] Note: checking existing update #${updateId} encountered: ${formatPbError(checkErr)}`,
+        )
+      }
 
       if (alreadyExists) {
         console.log(`⏩ [Telegram Sync] Update #${updateId} already exists in DB. Skipping.`)
@@ -333,7 +363,7 @@ async function run() {
 
     console.log('====================================================')
     console.log(
-      `🎉 [Telegram Sync Summary] Processed: ${updates.length} total, ${createdCount} created, ${skippedCount} skipped. Offset: ${maxUpdateId + 1}`,
+      `🎉 [Telegram Sync Summary] Processed: ${updates.length} total, ${createdCount} created, ${skippedCount} skipped. Next offset: ${maxUpdateId + 1}`,
     )
     console.log('====================================================')
   } catch (error) {

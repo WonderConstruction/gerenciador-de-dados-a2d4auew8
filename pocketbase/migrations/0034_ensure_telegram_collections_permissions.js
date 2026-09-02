@@ -38,6 +38,19 @@ migrate(
     } catch (e) {
       console.log('[Migration 0034] Error updating bot_messages rules:', e)
     }
+
+    // 4. Ensure transactions has open rules so telegram hook / bot can query and create transactions
+    try {
+      const txCol = app.findCollectionByNameOrId('transactions')
+      txCol.listRule = ''
+      txCol.viewRule = ''
+      txCol.createRule = ''
+      txCol.updateRule = ''
+      txCol.deleteRule = ''
+      app.save(txCol)
+    } catch (e) {
+      console.log('[Migration 0034] Error updating transactions rules:', e)
+    }
   },
   (app) => {
     try {
