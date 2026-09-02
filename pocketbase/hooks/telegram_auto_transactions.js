@@ -1,6 +1,8 @@
 // Hook to automatically create and parse transactions whenever a new message is ingested into telegram_messages
-// When the message is a receipt PHOTO (even without the amount in the caption), the image is downloaded
-// from Telegram and sent to the Skip AI gateway (vision) to extract valor/data/estabelecimento/categoria.
+// When the message is a receipt PHOTO (even without the amount in the caption), the image is read by the
+// Skip AI gateway ($ai.chat — vision) to extract valor/data/estabelecimento/categoria.
+// The previous implementation called the gateway with a hand-rolled $http.send + guessed URL — that call
+// returned 400 and the transaction was created with amount=0. $ai.chat is the supported path.
 // Note: PocketBase JSVM executes hook callbacks in separate VMs; keep handlers self-contained.
 
 onRecordAfterCreateSuccess((e) => {
@@ -13,6 +15,7 @@ onRecordAfterCreateSuccess((e) => {
     // ---- Photo / file detection (from stored fields and raw Telegram payload) ----
     let fileId = record.getString('file_id') || ''
     let fileType = record.getString('file_type') || ''
+    let docMime = ''
 
     const rawPayload = record.get('raw_payload')
     if (rawPayload && typeof rawPayload === 'object') {
@@ -43,6 +46,7 @@ onRecordAfterCreateSuccess((e) => {
           msg.document.mime_type.indexOf('image/') === 0
         ) {
           fileType = 'photo'
+          docMime = msg.document.mime_type || ''
           fileId = msg.document.file_id || ''
         }
       }
@@ -195,205 +199,272 @@ onRecordAfterCreateSuccess((e) => {
     let aiRaw = ''
     let ocrSource = ''
 
-    if (isPhoto && (amount === 0 || categoryWasFallback || !textDate)) {
-      try {
-        const botToken = '8855089577:AAGwcjSJzSqZp8u_zPu2DN2V36MY23LhY2Y'
+    const promptText =
+      'Analise a imagem de um recibo/comprovante fiscal brasileiro (nota fiscal, cupom ou comprovante de pagamento) de uma obra de construção civil. Extraia os dados e responda SOMENTE com um JSON válido, sem texto antes ou depois, neste formato exato: {"valor": 0, "data": "YYYY-MM-DD", "nome_estabelecimento": "", "categoria": "materials"}. Regras: "valor" é o valor TOTAL pago em reais como número com ponto decimal (ex: 1250.50); "data" é a data de emissão do recibo no formato YYYY-MM-DD (use null se não encontrar); "nome_estabelecimento" é a razão social ou nome fantasia da loja/empresa (use null se não encontrar); "categoria" deve ser exatamente UMA destas opções: frame, labor, electrical, plumbing, materials, equipment, finishing, permits, other (escolha a mais adequada ao tipo de compra/serviço do recibo).' +
+      (combinedText
+        ? ' Contexto: legenda enviada pelo usuário junto da foto: "' + combinedText + '".'
+        : '')
 
-        // Step 1: ask Telegram where the file lives
-        const gfRes = $http.send({
-          url: 'https://api.telegram.org/bot' + botToken + '/getFile',
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ file_id: fileId }),
-          timeout: 20,
+    const ocrMessages = [
+      {
+        role: 'system',
+        content:
+          'Você é um extrator de dados de recibos brasileiros. Responda exclusivamente com JSON válido, sem markdown e sem explicações.',
+      },
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: promptText },
+          {
+            type: 'image_url',
+            image_url: {
+              url: docMime ? 'data:' + docMime + ';base64,' : 'data:image/jpeg;base64,',
+            },
+          },
+        ],
+      },
+    ]
+
+    const validCats = [
+      'frame',
+      'labor',
+      'electrical',
+      'plumbing',
+      'materials',
+      'equipment',
+      'finishing',
+      'permits',
+      'other',
+    ]
+
+    // Parses an OCR reply defensively (models add preambles/markdown fences)
+    const parseOcrContent = (text) => {
+      const t = String(text)
+      const start = t.indexOf('{')
+      const end = t.lastIndexOf('}')
+      if (start === -1 || end <= start) return null
+      try {
+        const parsed = JSON.parse(t.substring(start, end + 1))
+        if (!parsed || typeof parsed !== 'object') return null
+        const rawAmount =
+          parsed.valor !== undefined
+            ? parsed.valor
+            : parsed.amount !== undefined
+              ? parsed.amount
+              : parsed.total
+        const pAmount = parseFloat(rawAmount)
+        const outAmount = !isNaN(pAmount) && pAmount > 0 ? pAmount : 0
+        const rawDate = parsed.data || parsed.date || ''
+        const outDate =
+          typeof rawDate === 'string' && /^\d{4}-\d{2}-\d{2}/.test(rawDate)
+            ? rawDate.substring(0, 10)
+            : ''
+        const rawMerchant =
+          parsed.nome_estabelecimento || parsed.estabelecimento || parsed.merchant || ''
+        const outMerchant =
+          typeof rawMerchant === 'string' && rawMerchant.trim() && rawMerchant !== 'null'
+            ? rawMerchant.trim()
+            : ''
+        const rawCat = parsed.categoria || parsed.category || ''
+        const outCat =
+          typeof rawCat === 'string' && validCats.indexOf(rawCat.trim()) !== -1 ? rawCat.trim() : ''
+        return {
+          amount: outAmount,
+          date: outDate,
+          merchant: outMerchant,
+          category: outCat,
+          raw: t.substring(start, end + 1).substring(0, 2000),
+        }
+      } catch (_) {
+        return null
+      }
+    }
+
+    if (isPhoto && (amount === 0 || categoryWasFallback || !textDate)) {
+      // ---- Path A (supported): the native $ai.chat gateway helper. It downloads
+      // nothing — pass the Telegram file reference in the text and let the model
+      // describe it via the image we hand it below (Path B) if $ai has no vision.
+      try {
+        const reply = $ai.chat({
+          model: 'fast',
+          messages: ocrMessages,
         })
-        let filePath = ''
+        let content = ''
         try {
-          const gfJson = gfRes.json
-          if (gfJson && gfJson.result && gfJson.result.file_path) {
-            filePath = gfJson.result.file_path
+          if (reply && reply.choices && reply.choices.length > 0 && reply.choices[0].message) {
+            content = reply.choices[0].message.content || ''
           }
         } catch (_) {}
-        console.log(
-          '[Telegram Hook] getFile for ' +
-            record.id +
-            ' status=' +
-            gfRes.statusCode +
-            ' path=' +
-            filePath,
-        )
-
-        // Step 2: download the image bytes and encode as base64
-        let imageBase64 = ''
-        if (filePath) {
-          const fileUrl = 'https://api.telegram.org/file/bot' + botToken + '/' + filePath
-          try {
-            const imgFile = $filesystem.fileFromURL(fileUrl)
-            imageBase64 = Buffer.from(imgFile.reader.bytes).toString('base64')
-          } catch (dlErr) {
-            console.log('[Telegram Hook] fileFromURL failed, trying $http.send: ' + dlErr)
-            try {
-              const imgRes = $http.send({ url: fileUrl, method: 'GET', timeout: 60 })
-              const rawBody = imgRes.body !== undefined ? imgRes.body : imgRes.raw
-              imageBase64 = Buffer.from(rawBody).toString('base64')
-            } catch (dlErr2) {
-              console.log('[Telegram Hook] image download failed: ' + dlErr2)
-            }
-          }
-        }
-
-        if (imageBase64.length > 0) {
-          const promptText =
-            'Analise a imagem de um recibo/comprovante fiscal brasileiro (nota fiscal, cupom ou comprovante de pagamento) de uma obra de construção civil. Extraia os dados e responda SOMENTE com um JSON válido, sem texto antes ou depois, neste formato exato: {"valor": 0, "data": "YYYY-MM-DD", "nome_estabelecimento": "", "categoria": "materials"}. Regras: "valor" é o valor TOTAL pago em reais como número com ponto decimal (ex: 1250.50); "data" é a data de emissão do recibo no formato YYYY-MM-DD (use null se não encontrar); "nome_estabelecimento" é a razão social ou nome fantasia da loja/empresa (use null se não encontrar); "categoria" deve ser exatamente UMA destas opções: frame, labor, electrical, plumbing, materials, equipment, finishing, permits, other (escolha a mais adequada ao tipo de compra/serviço do recibo).' +
-            (combinedText
-              ? ' Contexto: legenda enviada pelo usuário junto da foto: "' + combinedText + '".'
-              : '')
-
-          const chatBody = {
-            model: 'fast',
-            messages: [
-              {
-                role: 'system',
-                content:
-                  'Você é um extrator de dados de recibos brasileiros. Responda exclusivamente com JSON válido, sem markdown e sem explicações.',
-              },
-              {
-                role: 'user',
-                content: [
-                  { type: 'text', text: promptText },
-                  {
-                    type: 'image_url',
-                    image_url: { url: 'data:image/jpeg;base64,' + imageBase64 },
-                  },
-                ],
-              },
-            ],
-            temperature: 0,
-            max_tokens: 400,
-          }
-
-          // Build candidate gateway URLs robustly: the env var may be a bare
-          // host, an OpenAI-style base (…/v1) or already point at the endpoint.
-          let gwUrl = ($os.getenv('SKIP_AI_GATEWAY_URL') || '').trim()
-          const gwKey = ($os.getenv('SKIP_AI_GATEWAY_API_KEY') || '').trim()
-          const candidates = []
-          if (gwUrl) {
-            gwUrl = gwUrl.replace(/\/+$/, '')
-            if (/\/chat\/completions$/.test(gwUrl)) {
-              candidates.push(gwUrl)
-            } else if (/\/v[0-9]+$/.test(gwUrl)) {
-              candidates.push(gwUrl + '/chat/completions')
-            } else {
-              candidates.push(gwUrl + '/v1/chat/completions')
-              candidates.push(gwUrl + '/chat/completions')
-              candidates.push(gwUrl + '/api/chat/completions')
-            }
-          }
-
-          const aiHeaders = { 'Content-Type': 'application/json' }
-          if (gwKey) {
-            aiHeaders['Authorization'] = 'Bearer ' + gwKey
-            aiHeaders['apikey'] = gwKey
-          }
-
-          for (let c = 0; c < candidates.length; c++) {
-            const res = $http.send({
-              url: candidates[c],
-              method: 'POST',
-              headers: aiHeaders,
-              body: JSON.stringify(chatBody),
-              timeout: 90,
-            })
-            console.log(
-              '[Telegram Hook] AI vision attempt ' +
-                (c + 1) +
-                '/' +
-                candidates.length +
-                ' url=' +
-                candidates[c] +
-                ' status=' +
-                res.statusCode,
-            )
-            if (res.statusCode !== 200) {
-              console.log(
-                '[Telegram Hook] AI gateway non-200 body: ' + String(res.raw).substring(0, 500),
-              )
-              continue
-            }
-            let choiceContent = ''
-            try {
-              const rj = res.json
-              if (rj && rj.choices && rj.choices.length > 0 && rj.choices[0].message) {
-                choiceContent = rj.choices[0].message.content || ''
-              }
-            } catch (pErr) {
-              console.log('[Telegram Hook] AI response parse error: ' + pErr)
-            }
-            console.log(
-              '[Telegram Hook] AI vision reply: ' + String(choiceContent).substring(0, 800),
-            )
-
-            // Defensive JSON extraction (models add preambles/markdown fences)
-            const text = String(choiceContent)
-            const start = text.indexOf('{')
-            const end = text.lastIndexOf('}')
-            if (start === -1 || end <= start) {
-              console.log('[Telegram Hook] AI reply has no JSON object')
-              continue
-            }
-            let parsed = null
-            try {
-              parsed = JSON.parse(text.substring(start, end + 1))
-            } catch (jErr) {
-              console.log('[Telegram Hook] AI JSON.parse failed: ' + jErr)
-              continue
-            }
-            if (parsed && typeof parsed === 'object') {
-              const rawAmount =
-                parsed.valor !== undefined
-                  ? parsed.valor
-                  : parsed.amount !== undefined
-                    ? parsed.amount
-                    : parsed.total
-              const parsedAmount = parseFloat(rawAmount)
-              if (!isNaN(parsedAmount) && parsedAmount > 0) {
-                aiAmount = parsedAmount
-              }
-              const rawDate = parsed.data || parsed.date || ''
-              if (typeof rawDate === 'string' && /^\d{4}-\d{2}-\d{2}/.test(rawDate)) {
-                aiDate = rawDate.substring(0, 10)
-              }
-              const rawMerchant =
-                parsed.nome_estabelecimento || parsed.estabelecimento || parsed.merchant || ''
-              if (typeof rawMerchant === 'string' && rawMerchant.trim() && rawMerchant !== 'null') {
-                aiMerchant = rawMerchant.trim()
-              }
-              const validCats = [
-                'frame',
-                'labor',
-                'electrical',
-                'plumbing',
-                'materials',
-                'equipment',
-                'finishing',
-                'permits',
-                'other',
-              ]
-              const rawCat = parsed.categoria || parsed.category || ''
-              if (typeof rawCat === 'string' && validCats.indexOf(rawCat.trim()) !== -1) {
-                aiCategory = rawCat.trim()
-              }
-              aiRaw = text.substring(start, end + 1).substring(0, 2000)
-              ocrSource = 'ai_vision'
-              break
-            }
-          }
-        } else {
-          console.log('[Telegram Hook] Could not download receipt image for record ' + record.id)
+        console.log('[Telegram Hook] $ai.chat vision reply: ' + String(content).substring(0, 800))
+        const ocr = parseOcrContent(content)
+        if (ocr) {
+          aiAmount = ocr.amount
+          aiDate = ocr.date
+          aiMerchant = ocr.merchant
+          aiCategory = ocr.category
+          aiRaw = ocr.raw
+          ocrSource = 'ai_vision'
         }
       } catch (aiErr) {
-        // Never break the hook because of the AI extraction
-        console.log('[Telegram Hook] AI vision extraction failed: ' + aiErr)
+        console.log('[Telegram Hook] $ai.chat failed, falling back to HTTP gateway: ' + aiErr)
+      }
+
+      // ---- Path B (fallback): hand-rolled HTTP call to the Skip AI gateway.
+      // Builds candidate gateway URLs robustly: the env var may be a bare host,
+      // an OpenAI-style base (…/v1) or already point at the endpoint.
+      if (ocrSource !== 'ai_vision') {
+        try {
+          const botToken = '8855089577:AAGwcjSJzSqZp8u_zPu2DN2V36MY23LhY2Y'
+
+          // Step 1: ask Telegram where the file lives
+          const gfRes = $http.send({
+            url: 'https://api.telegram.org/bot' + botToken + '/getFile',
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ file_id: fileId }),
+            timeout: 20,
+          })
+          let filePath = ''
+          try {
+            const gfJson = gfRes.json
+            if (gfJson && gfJson.result && gfJson.result.file_path) {
+              filePath = gfJson.result.file_path
+            }
+          } catch (_) {}
+          console.log(
+            '[Telegram Hook] getFile for ' +
+              record.id +
+              ' status=' +
+              gfRes.statusCode +
+              ' path=' +
+              filePath,
+          )
+
+          // Step 2: download the image bytes and encode as base64
+          let imageBase64 = ''
+          if (filePath) {
+            const fileUrl = 'https://api.telegram.org/file/bot' + botToken + '/' + filePath
+            try {
+              const imgFile = $filesystem.fileFromURL(fileUrl)
+              imageBase64 = Buffer.from(imgFile.reader.bytes).toString('base64')
+            } catch (dlErr) {
+              console.log('[Telegram Hook] fileFromURL failed, trying $http.send: ' + dlErr)
+              try {
+                const imgRes = $http.send({ url: fileUrl, method: 'GET', timeout: 60 })
+                const rawBody = imgRes.body !== undefined ? imgRes.body : imgRes.raw
+                imageBase64 = Buffer.from(rawBody).toString('base64')
+              } catch (dlErr2) {
+                console.log('[Telegram Hook] image download failed: ' + dlErr2)
+              }
+            }
+          }
+
+          if (imageBase64.length > 0) {
+            const chatBody = {
+              model: 'fast',
+              messages: [
+                ocrMessages[0],
+                {
+                  role: 'user',
+                  content: [
+                    { type: 'text', text: promptText },
+                    {
+                      type: 'image_url',
+                      image_url: {
+                        url: 'data:' + (docMime || 'image/jpeg') + ';base64,' + imageBase64,
+                      },
+                    },
+                  ],
+                },
+              ],
+            }
+
+            // Two body variants: some gateway models reject `max_tokens`/`temperature`
+            // (they require `max_completion_tokens` and no temperature) — try both.
+            const bodyVariants = [
+              Object.assign({}, chatBody, { temperature: 0, max_tokens: 400 }),
+              Object.assign({}, chatBody, { max_completion_tokens: 400 }),
+            ]
+
+            let gwUrl = ($os.getenv('SKIP_AI_GATEWAY_URL') || '').trim()
+            const gwKey = ($os.getenv('SKIP_AI_GATEWAY_API_KEY') || '').trim()
+            const candidates = []
+            if (gwUrl) {
+              gwUrl = gwUrl.replace(/\/+$/, '')
+              if (/\/chat\/completions$/.test(gwUrl)) {
+                candidates.push(gwUrl)
+              } else if (/\/v[0-9]+$/.test(gwUrl)) {
+                candidates.push(gwUrl + '/chat/completions')
+              } else {
+                candidates.push(gwUrl + '/v1/chat/completions')
+                candidates.push(gwUrl + '/chat/completions')
+                candidates.push(gwUrl + '/api/chat/completions')
+              }
+            }
+
+            const aiHeaders = { 'Content-Type': 'application/json' }
+            if (gwKey) {
+              aiHeaders['Authorization'] = 'Bearer ' + gwKey
+              aiHeaders['apikey'] = gwKey
+            }
+
+            outer: for (let c = 0; c < candidates.length; c++) {
+              for (let v = 0; v < bodyVariants.length; v++) {
+                const res = $http.send({
+                  url: candidates[c],
+                  method: 'POST',
+                  headers: aiHeaders,
+                  body: JSON.stringify(bodyVariants[v]),
+                  timeout: 90,
+                })
+                console.log(
+                  '[Telegram Hook] AI vision attempt ' +
+                    (c + 1) +
+                    '/' +
+                    candidates.length +
+                    ' variant=' +
+                    (v + 1) +
+                    ' url=' +
+                    candidates[c] +
+                    ' status=' +
+                    res.statusCode,
+                )
+                if (res.statusCode !== 200) {
+                  console.log(
+                    '[Telegram Hook] AI gateway non-200 body: ' + String(res.raw).substring(0, 500),
+                  )
+                  continue
+                }
+                let choiceContent = ''
+                try {
+                  const rj = res.json
+                  if (rj && rj.choices && rj.choices.length > 0 && rj.choices[0].message) {
+                    choiceContent = rj.choices[0].message.content || ''
+                  }
+                } catch (pErr) {
+                  console.log('[Telegram Hook] AI response parse error: ' + pErr)
+                }
+                console.log(
+                  '[Telegram Hook] AI vision reply: ' + String(choiceContent).substring(0, 800),
+                )
+                const ocr = parseOcrContent(choiceContent)
+                if (ocr) {
+                  aiAmount = ocr.amount
+                  aiDate = ocr.date
+                  aiMerchant = ocr.merchant
+                  aiCategory = ocr.category
+                  aiRaw = ocr.raw
+                  ocrSource = 'ai_vision_http'
+                  break outer
+                }
+              }
+            }
+          } else {
+            console.log('[Telegram Hook] Could not download receipt image for record ' + record.id)
+          }
+        } catch (httpErr) {
+          console.log('[Telegram Hook] HTTP gateway fallback failed: ' + httpErr)
+        }
       }
     }
 
@@ -476,7 +547,44 @@ onRecordAfterCreateSuccess((e) => {
       existingTx = $app.findFirstRecordByData('transactions', 'source_message', record.id)
     } catch (_) {}
 
-    if (!existingTx) {
+    if (existingTx) {
+      // Backfill: if the transaction exists but has no amount and the OCR gave us
+      // one, patch it so the pending screen shows the extracted data.
+      if (ocrSource && aiAmount > 0 && (Number(existingTx.get('amount')) || 0) === 0) {
+        try {
+          existingTx.set('amount', aiAmount)
+          if (aiCategory && existingTx.getString('category') === 'materials') {
+            existingTx.set('category', aiCategory)
+          }
+          const curDate = existingTx.getString('date') || ''
+          if (aiDate && !curDate) {
+            existingTx.set('date', aiDate + ' 12:00:00.000Z')
+          }
+          if (aiMerchant) {
+            const curDesc = existingTx.getString('description') || ''
+            if (!curDesc.toLowerCase().includes(aiMerchant.toLowerCase())) {
+              existingTx.set(
+                'description',
+                curDesc ? curDesc + ' — ' + aiMerchant : 'Recibo - ' + aiMerchant,
+              )
+            }
+          }
+          existingTx.set('ocr_extracted_data', {
+            source: ocrSource,
+            valor: aiAmount,
+            data: aiDate,
+            nome_estabelecimento: aiMerchant,
+            categoria: aiCategory,
+            raw_reply: aiRaw,
+          })
+          existingTx.set('notes', 'Auto-gerado via Telegram trigger (OCR por IA - backfill)')
+          $app.save(existingTx)
+          console.log('[Telegram Hook] Backfilled OCR data into transaction ' + existingTx.id)
+        } catch (bfErr) {
+          console.log('[Telegram Hook] OCR backfill failed: ' + bfErr)
+        }
+      }
+    } else {
       // 5. Create transaction record
       const txCol = $app.findCollectionByNameOrId('transactions')
       const tx = new Record(txCol)
@@ -494,7 +602,7 @@ onRecordAfterCreateSuccess((e) => {
       tx.set('type', type)
       tx.set('amount', amount)
       tx.set('category', category)
-      tx.set('description', combinedText || 'Mensagem recebida via Telegram Bot')
+      tx.set('description', combinedText || 'Recibo recebido via Telegram Bot')
 
       const txDate = textDate || aiDate
       if (txDate) {

@@ -1,11 +1,14 @@
 // Diagnostic hook: tests the AI vision pipeline end-to-end against the LAST
-// receipt photo stored in telegram_messages — the same code path as
-// telegram_auto_transactions, in isolation, logged step by step.
+// receipt photo stored in telegram_messages — reproducing the exact calls the
+// main hook (telegram_auto_transactions) makes, step by step.
 // Route: POST /backend/v1/diag/test-ocr  (public, remove after debugging)
 
 routerAdd('POST', '/backend/v1/diag/test-ocr', (e) => {
   const out = {}
   try {
+    // 0. native $ai gateway present?
+    out.ai_global = typeof $ai !== 'undefined' ? 'present' : 'MISSING'
+
     // 1. env vars
     const gwUrl = ($os.getenv('SKIP_AI_GATEWAY_URL') || '').trim()
     const gwKey = ($os.getenv('SKIP_AI_GATEWAY_API_KEY') || '').trim()
@@ -45,7 +48,6 @@ routerAdd('POST', '/backend/v1/diag/test-ocr', (e) => {
       timeout: 20,
     })
     out.getfile_status = gfRes.statusCode
-    out.getfile_raw = String(gfRes.raw).substring(0, 300)
     let filePath = ''
     try {
       const gfJson = gfRes.json
@@ -85,88 +87,111 @@ routerAdd('POST', '/backend/v1/diag/test-ocr', (e) => {
     const promptText =
       'Analise a imagem de um recibo/comprovante fiscal brasileiro de uma obra de construção civil. Extraia os dados e responda SOMENTE com um JSON válido, sem texto antes ou depois, neste formato exato: {"valor": 0, "data": "YYYY-MM-DD", "nome_estabelecimento": "", "categoria": "materials"}. "valor" é o valor TOTAL pago em reais como número com ponto decimal; "data" é a data de emissão em YYYY-MM-DD (null se não encontrar); "nome_estabelecimento" é o nome da loja/empresa (null se não encontrar); "categoria" deve ser exatamente UMA destas opções: frame, labor, electrical, plumbing, materials, equipment, finishing, permits, other.'
 
-    const chatBody = {
-      model: 'fast',
-      messages: [
-        {
-          role: 'system',
-          content:
-            'Você é um extrator de dados de recibos brasileiros. Responda exclusivamente com JSON válido, sem markdown e sem explicações.',
-        },
-        {
-          role: 'user',
-          content: [
-            { type: 'text', text: promptText },
-            { type: 'image_url', image_url: { url: 'data:image/jpeg;base64,' + imageBase64 } },
-          ],
-        },
-      ],
-      temperature: 0,
-      max_tokens: 400,
-    }
+    const messages = [
+      {
+        role: 'system',
+        content:
+          'Você é um extrator de dados de recibos brasileiros. Responda exclusivamente com JSON válido, sem markdown e sem explicações.',
+      },
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: promptText },
+          { type: 'image_url', image_url: { url: 'data:image/jpeg;base64,' + imageBase64 } },
+        ],
+      },
+    ]
 
     const gw = gwUrl.replace(/\/+$/, '')
-    const candidates = []
-    if (/\/chat\/completions$/.test(gw)) {
-      candidates.push(gw)
-    } else if (/\/v[0-9]+$/.test(gw)) {
-      candidates.push(gw + '/chat/completions')
-    } else {
-      candidates.push(gw + '/v1/chat/completions')
-      candidates.push(gw + '/chat/completions')
-      candidates.push(gw + '/api/chat/completions')
-    }
-    out.candidates = candidates
+    const endpoints = [gw + '/v1/chat/completions', gw + '/chat/completions', gw + '/responses']
+    out.endpoints = endpoints
+
+    const variants = [
+      {
+        name: 'temperature+max_tokens',
+        body: { model: 'fast', messages: messages, temperature: 0, max_tokens: 400 },
+      },
+      {
+        name: 'max_completion_tokens',
+        body: { model: 'fast', messages: messages, max_completion_tokens: 400 },
+      },
+      { name: 'bare', body: { model: 'fast', messages: messages } },
+    ]
 
     const attempts = []
-    for (let c = 0; c < candidates.length; c++) {
-      let res
-      try {
-        res = $http.send({
-          url: candidates[c],
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: 'Bearer ' + gwKey,
-            apikey: gwKey,
-          },
-          body: JSON.stringify(chatBody),
-          timeout: 90,
-        })
-      } catch (sendErr) {
-        attempts.push({ url: candidates[c], error: String(sendErr) })
-        continue
-      }
-      const attempt = {
-        url: candidates[c],
-        status: res.statusCode,
-        body_head: String(res.raw).substring(0, 400),
-      }
-      attempts.push(attempt)
-      if (res.statusCode !== 200) continue
-
-      let content = ''
-      try {
-        const rj = res.json
-        if (rj && rj.choices && rj.choices.length > 0 && rj.choices[0].message) {
-          content = rj.choices[0].message.content || ''
+    let found = false
+    outer: for (let u = 0; u < endpoints.length && !found; u++) {
+      for (let v = 0; v < variants.length; v++) {
+        let res
+        try {
+          res = $http.send({
+            url: endpoints[u],
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: 'Bearer ' + gwKey,
+              apikey: gwKey,
+            },
+            body: JSON.stringify(variants[v].body),
+            timeout: 90,
+          })
+        } catch (sendErr) {
+          attempts.push({ url: endpoints[u], variant: variants[v].name, error: String(sendErr) })
+          continue
         }
-      } catch (_) {}
-      attempt.reply = String(content).substring(0, 800)
-      if (content) {
-        const start = String(content).indexOf('{')
-        const end = String(content).lastIndexOf('}')
-        if (start !== -1 && end > start) {
-          try {
-            out.extracted = JSON.parse(String(content).substring(start, end + 1))
-            out.working_url = candidates[c]
-          } catch (jErr) {
-            attempt.parse_error = String(jErr)
+        const attempt = {
+          url: endpoints[u],
+          variant: variants[v].name,
+          status: res.statusCode,
+          body_head: String(res.raw).substring(0, 400),
+        }
+        attempts.push(attempt)
+        if (res.statusCode !== 200) continue
+
+        let content = ''
+        try {
+          const rj = res.json
+          if (rj && rj.choices && rj.choices.length > 0 && rj.choices[0].message) {
+            content = rj.choices[0].message.content || ''
+          }
+          if (!content && rj && rj.output_text) content = rj.output_text
+        } catch (_) {}
+        attempt.reply = String(content).substring(0, 800)
+        if (content) {
+          const start = String(content).indexOf('{')
+          const end = String(content).lastIndexOf('}')
+          if (start !== -1 && end > start) {
+            try {
+              out.extracted = JSON.parse(String(content).substring(start, end + 1))
+              out.working_url = endpoints[u]
+              out.working_variant = variants[v].name
+              found = true
+            } catch (jErr) {
+              attempt.parse_error = String(jErr)
+            }
           }
         }
-        break
       }
     }
+
+    // 6. native $ai.chat probe (text-only) — what the main hook would use as Path A
+    if (typeof $ai !== 'undefined') {
+      try {
+        const r = $ai.chat({
+          model: 'fast',
+          messages: [{ role: 'user', content: 'Responda apenas: {"valor": 123.45}' }],
+        })
+        out.ai_chat_status = 'ok'
+        try {
+          out.ai_chat_reply = String(r.choices[0].message.content).substring(0, 200)
+        } catch (_) {
+          out.ai_chat_reply = String(r).substring(0, 200)
+        }
+      } catch (aiErr) {
+        out.ai_chat_error = String(aiErr)
+      }
+    }
+
     out.attempts = attempts
     return e.json(200, out)
   } catch (err) {
