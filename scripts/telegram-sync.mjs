@@ -35,17 +35,28 @@ pb.autoCancellation(false)
 async function authenticate() {
   if (PB_AUTH_EMAIL && PB_AUTH_PASSWORD) {
     try {
-      console.log(`Authenticating PocketBase as ${PB_AUTH_EMAIL}...`)
-      await pb.collection('users').authWithPassword(PB_AUTH_EMAIL, PB_AUTH_PASSWORD)
-      console.log('[Auth] Authenticated successfully as user.')
+      console.log(
+        `[Auth] Attempting PocketBase authentication with collection 'users' as ${PB_AUTH_EMAIL}...`,
+      )
+      const authData = await pb
+        .collection('users')
+        .authWithPassword(PB_AUTH_EMAIL, PB_AUTH_PASSWORD)
+      console.log(
+        `[Auth] Authenticated successfully! User ID: ${authData?.record?.id || pb.authStore?.record?.id || 'OK'}`,
+      )
     } catch (err) {
+      const status = err?.status || err?.response?.status || 'unknown'
+      const detail = err?.data ? JSON.stringify(err.data) : err?.message || String(err)
+      console.error(
+        `[Auth Error] User authentication failed for ${PB_AUTH_EMAIL} (HTTP ${status}): ${detail}`,
+      )
       console.warn(
-        `[Auth] User authentication failed (${err?.message || err}). Attempting fallback or public access rules...`,
+        '[Auth Warning] Please check if PB_AUTH_EMAIL and PB_AUTH_PASSWORD GitHub Secrets match a valid user in PocketBase collection "users". Continuing with current session/public access rules...',
       )
     }
   } else {
     console.log(
-      '[Auth] No PB_AUTH_EMAIL/PB_AUTH_PASSWORD provided; proceeding with public access rules.',
+      '[Auth] No PB_AUTH_EMAIL or PB_AUTH_PASSWORD secret provided in environment. Proceeding using public collection access rules.',
     )
   }
 }
@@ -119,7 +130,12 @@ async function updateState(stateRecord, newLastUpdateId) {
     }
     console.log(`[State] Successfully updated last_update_id to ${newLastUpdateId}`)
   } catch (err) {
-    console.error('[State] Failed to persist last_update_id:', err?.message || err)
+    const status = err?.status || err?.response?.status || ''
+    const detail = err?.data ? JSON.stringify(err.data) : err?.message || String(err)
+    console.error(
+      `[State Error] Failed to persist last_update_id ${status ? '(HTTP ' + status + ')' : ''}:`,
+      detail,
+    )
   }
 }
 
@@ -250,7 +266,12 @@ async function run() {
           console.log(`[Telegram Sync] Update #${updateId} ignored due to unique rule.`)
           skippedCount++
         } else {
-          console.error(`[Telegram Sync] Error inserting update #${updateId}:`, err?.message || err)
+          const status = err?.status || err?.response?.status || ''
+          const detail = err?.data ? JSON.stringify(err.data) : err?.message || String(err)
+          console.error(
+            `[Telegram Sync Error] Error inserting update #${updateId} ${status ? '(HTTP ' + status + ')' : ''}:`,
+            detail,
+          )
         }
       }
     }
@@ -263,7 +284,17 @@ async function run() {
       `[Telegram Sync Summary] Processed: ${updates.length} total, ${createdCount} created, ${skippedCount} skipped. New offset: ${maxUpdateId + 1}`,
     )
   } catch (error) {
-    console.error('[Telegram Sync Error] Unhandled error during sync:', error)
+    const errorDetails = error?.data
+      ? JSON.stringify(error.data, null, 2)
+      : error?.stack || error?.message || String(error)
+    console.error('[Telegram Sync Error] Fatal error during sync execution:')
+    console.error(errorDetails)
+    if (error?.url) {
+      console.error(`[Telegram Sync Error] Failed Request URL: ${error.url}`)
+    }
+    if (error?.status) {
+      console.error(`[Telegram Sync Error] HTTP Status: ${error.status}`)
+    }
     process.exit(1)
   }
 }
