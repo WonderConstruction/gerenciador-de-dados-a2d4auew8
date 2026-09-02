@@ -5,7 +5,8 @@ import PocketBase from 'pocketbase'
  *
  * Connects to PocketBase, fetches last_update_id from `telegram_state`,
  * pulls latest updates from Telegram Bot API via getUpdates,
- * creates records in `telegram_messages` (which fires the onRecordCreate hook for automatic transaction creation),
+ * creates records in `telegram_messages` (which fires the onRecordAfterCreateSuccess hook
+ * for automatic transaction creation and parsing),
  * and advances `last_update_id` and `last_poll_at` in `telegram_state`.
  */
 
@@ -29,7 +30,7 @@ const PB_AUTH_EMAIL = process.env.PB_AUTH_EMAIL ? process.env.PB_AUTH_EMAIL.trim
 const PB_AUTH_PASSWORD = process.env.PB_AUTH_PASSWORD ? process.env.PB_AUTH_PASSWORD.trim() : ''
 
 console.log('====================================================')
-console.log('🚀 Telegram Sync 24/7 Polling Script')
+console.log('🚀 Telegram Sync 24/7 Polling Script (Node.js)')
 console.log('====================================================')
 console.log(`[Config] PocketBase URL: ${POCKETBASE_URL}`)
 console.log(
@@ -38,7 +39,7 @@ console.log(
   }`,
 )
 console.log(
-  `[Config] PB Auth Email: ${PB_AUTH_EMAIL ? PB_AUTH_EMAIL : '(None provided - using public API rules)'}`,
+  `[Config] PB Auth Email: ${PB_AUTH_EMAIL ? PB_AUTH_EMAIL : '(None provided - using public collection rules)'}`,
 )
 console.log(
   `[Config] PB Auth Password: ${PB_AUTH_PASSWORD ? 'CONFIGURED (***)' : '(None provided)'}`,
@@ -103,13 +104,13 @@ async function authenticate() {
       // If auth failed, clear the invalid token from authStore so subsequent calls don't send a rejected Bearer token
       pb.authStore.clear()
       console.warn(
-        '⚠️ [Auth Warning] Cleared invalid auth token. Falling back to public access rules (collections allow public read/write).',
+        '⚠️ [Auth Warning] Cleared invalid auth token. Falling back to public access rules.',
       )
       return false
     }
   } else {
     console.log(
-      'ℹ️ [Auth] No PB_AUTH_EMAIL / PB_AUTH_PASSWORD secret provided or incomplete. Proceeding with public collection access rules.',
+      'ℹ️ [Auth] No PB_AUTH_EMAIL / PB_AUTH_PASSWORD secret provided. Proceeding with public collection access rules.',
     )
     return false
   }
@@ -146,24 +147,22 @@ async function getLastUpdateId() {
   }
 
   // Fallback: check max update_id from telegram_messages
-  if (!stateRecord || lastUpdateId === 0) {
-    try {
-      const msgs = await pb.collection('telegram_messages').getList(1, 1, {
-        filter: 'update_id > 0',
-        sort: '-update_id',
-      })
-      if (msgs.items && msgs.items.length > 0) {
-        const maxDbId = Number(msgs.items[0].update_id) || 0
-        if (maxDbId > lastUpdateId) {
-          lastUpdateId = maxDbId
-          console.log(`📌 [State] Discovered max update_id from telegram_messages: ${lastUpdateId}`)
-        }
+  try {
+    const msgs = await pb.collection('telegram_messages').getList(1, 1, {
+      filter: 'update_id > 0',
+      sort: '-update_id',
+    })
+    if (msgs.items && msgs.items.length > 0) {
+      const maxDbId = Number(msgs.items[0].update_id) || 0
+      if (maxDbId > lastUpdateId) {
+        lastUpdateId = maxDbId
+        console.log(`📌 [State] Discovered max update_id from telegram_messages: ${lastUpdateId}`)
       }
-    } catch (err) {
-      console.warn(
-        `⚠️ [State] Could not check telegram_messages for max update_id: ${formatPbError(err)}`,
-      )
     }
+  } catch (err) {
+    console.warn(
+      `⚠️ [State] Could not check telegram_messages for max update_id: ${formatPbError(err)}`,
+    )
   }
 
   return { lastUpdateId, stateRecord }
@@ -245,15 +244,35 @@ async function run() {
 
     if (!response.ok) {
       const errorText = await response.text()
-      // If 409 Conflict, explain why and recommend deleting webhook
+      // If 409 Conflict (e.g. webhook was set), auto-clear webhook and retry once
       if (response.status === 409) {
+        console.warn(
+          '⚠️ [Telegram Conflict] Webhook active (HTTP 409). Calling deleteWebhook to switch to polling...',
+        )
+        try {
+          const delRes = await fetch(
+            `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/deleteWebhook?drop_pending_updates=false`,
+            { method: 'POST' },
+          )
+          const delJson = await delRes.json()
+          console.log('ℹ️ [deleteWebhook Result]', delJson)
+          if (delJson.ok) {
+            // Retry getUpdates
+            const retryRes = await fetch(telegramUrl)
+            if (retryRes.ok) {
+              response = retryRes
+            }
+          }
+        } catch (delErr) {
+          console.warn('⚠️ [deleteWebhook Error]', delErr)
+        }
+      }
+
+      if (!response.ok) {
         throw new Error(
-          `Telegram API HTTP 409 Conflict: A webhook is currently set for this bot. Please clear/delete the webhook in the Telegram tab or via deleteWebhook API so polling can receive updates. Details: ${errorText}`,
+          `Telegram API returned HTTP ${response.status} ${response.statusText}: ${errorText}`,
         )
       }
-      throw new Error(
-        `Telegram API returned HTTP ${response.status} ${response.statusText}: ${errorText}`,
-      )
     }
 
     const data = await response.json()
