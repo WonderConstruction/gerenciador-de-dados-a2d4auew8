@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
+import pb from '@/lib/pocketbase/client'
 import { useToast } from '@/hooks/use-toast'
 import { botService } from '@/services/botAndReports'
 import { telegramPolling, TelegramPollingStatus } from '@/services/telegramPolling'
@@ -71,6 +72,54 @@ export function TelegramWebhookConfig({ obras, onWebhookConfigured }: TelegramWe
   const [lastSyncResult, setLastSyncResult] = useState<{ processed: number; at: string } | null>(
     null,
   )
+  const [isDiagOcr, setIsDiagOcr] = useState(false)
+
+  // Dispara o teste completo de OCR (Telegram → base64 → IA visão) no backend
+  // contra a última foto de recibo salva em telegram_messages.
+  const handleDiagOcr = async () => {
+    setIsDiagOcr(true)
+    try {
+      const res: any = await pb.send('/backend/v1/diag/test-ocr', { method: 'POST', body: {} })
+      console.log('[DiagOCR] resultado completo:', res)
+
+      if (res?.error) {
+        toast({
+          title: 'Diagnóstico OCR',
+          description: 'Falhou: ' + res.error,
+          variant: 'destructive',
+        })
+      } else if (res?.extracted) {
+        const ex = res.extracted
+        toast({
+          title: '✅ OCR funcionando!',
+          description:
+            'Valor: R$ ' +
+            ex.valor +
+            ' | Data: ' +
+            (ex.data || 'n/d') +
+            ' | Local: ' +
+            (ex.nome_estabelecimento || 'n/d') +
+            ' | Cat: ' +
+            ex.categoria,
+        })
+      } else {
+        toast({
+          title: 'Diagnóstico OCR',
+          description: 'Sem extração — verifique o console do navegador e os logs do backend.',
+          variant: 'destructive',
+        })
+      }
+    } catch (err: any) {
+      console.error('[DiagOCR] falha:', err)
+      toast({
+        title: 'Diagnóstico OCR',
+        description: err?.message || 'Falha na chamada ao backend.',
+        variant: 'destructive',
+      })
+    } finally {
+      setIsDiagOcr(false)
+    }
+  }
 
   // Load state and bot profile on mount
   const refreshBackendData = useCallback(async () => {
@@ -646,6 +695,24 @@ export function TelegramWebhookConfig({ obras, onWebhookConfigured }: TelegramWe
                     )}
                   </div>
                 )}
+
+                {/* OCR (IA visão) pipeline test button */}
+                <div className="pt-2 border-t border-slate-800">
+                  <Button
+                    onClick={handleDiagOcr}
+                    disabled={isDiagOcr}
+                    className="w-full text-xs font-bold bg-sky-600 hover:bg-sky-700 text-white shadow-sm"
+                  >
+                    <RefreshCw
+                      className={`w-3.5 h-3.5 mr-1.5 ${isDiagOcr ? 'animate-spin' : ''}`}
+                    />
+                    {isDiagOcr ? 'Testando OCR com IA...' : 'Testar Leitura de Recibo por IA (OCR)'}
+                  </Button>
+                  <p className="text-[10px] text-slate-400 text-center mt-1.5 leading-tight">
+                    Baixa a última foto de recibo recebida, envia para a IA de visão e mostra os
+                    dados extraídos (valor, data, estabelecimento, categoria).
+                  </p>
+                </div>
 
                 {/* Highlighted Button in Diagnostics to Remove Conflict / Delete Webhook */}
                 <div className="pt-2 border-t border-slate-800">
