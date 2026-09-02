@@ -35,6 +35,7 @@ import {
 } from 'lucide-react'
 import { transactionsService } from '@/services/transactions'
 import { googleSheetsService } from '@/services/googleSheets'
+import { obrasService } from '@/services/obras'
 import { useToast } from '@/hooks/use-toast'
 
 interface GeneralDashboardProps {
@@ -58,6 +59,7 @@ export function GeneralDashboard({
   const [searchTerm, setSearchTerm] = useState('')
   const [reviewingTxId, setReviewingTxId] = useState<string | null>(null)
   const [isSyncingAll, setIsSyncingAll] = useState(false)
+  const [deletingObraId, setDeletingObraId] = useState<string | null>(null)
   const [editingTx, setEditingTx] = useState<{
     id: string
     amount: string
@@ -322,6 +324,33 @@ export function GeneralDashboard({
         description: err.message,
         variant: 'destructive',
       })
+    }
+  }
+
+  // Excluir obra (e suas transações vinculadas) a partir do card
+  const handleDeleteObra = async (obraId: string) => {
+    const obra = obras.find((o) => o.id === obraId)
+    const confirmed = window.confirm(
+      `Excluir a obra "${obra?.name || 'selecionada'}"? Todas as transações vinculadas serão removidas.`,
+    )
+    if (!confirmed) return
+
+    setDeletingObraId(obraId)
+    try {
+      await obrasService.deleteWithTransactions(obraId)
+      toast({
+        title: '✅ Obra excluída',
+        description: `A obra "${obra?.name || ''}" e todas as transações vinculadas foram removidas.`,
+      })
+      if (onRefreshData) onRefreshData()
+    } catch (err: any) {
+      toast({
+        title: '❌ Erro ao excluir obra',
+        description: err?.message || 'Não foi possível excluir a obra. Tente novamente.',
+        variant: 'destructive',
+      })
+    } finally {
+      setDeletingObraId(null)
     }
   }
 
@@ -778,6 +807,22 @@ export function GeneralDashboard({
                       >
                         {statusStyle.label}
                       </Badge>
+
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        title="Excluir obra"
+                        aria-label={`Excluir obra ${obra.name}`}
+                        disabled={deletingObraId === obra.id}
+                        onClick={() => handleDeleteObra(obra.id)}
+                        className="shrink-0 h-7 w-7 text-red-500 hover:text-red-600 hover:bg-red-50"
+                      >
+                        {deletingObraId === obra.id ? (
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        ) : (
+                          <Trash2 className="w-3.5 h-3.5" />
+                        )}
+                      </Button>
                     </div>
                   </CardHeader>
 

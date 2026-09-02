@@ -48,6 +48,19 @@ export const obrasService = {
     return await pb.collection('obras').delete(id)
   },
 
+  async deleteWithTransactions(id: string): Promise<boolean> {
+    const linked = await pb.collection('transactions').getFullList<Transaction>({
+      filter: `obra_id = "${id}"`,
+      fields: 'id',
+    })
+
+    for (const tx of linked) {
+      await pb.collection('transactions').delete(tx.id)
+    }
+
+    return await pb.collection('obras').delete(id)
+  },
+
   async getFinancialSummary(obraId: string): Promise<{
     totalIncome: number
     totalExpenses: number
